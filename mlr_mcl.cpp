@@ -4,133 +4,90 @@ Need two files: "ts_conns.dat" (two-column format: min1, min2) and "ts_weights.d
 in the current directory
 
 Compile with:
-g++ -std=c++11 mlr_mcl.cpp read_ktn.cpp -o mlr_mcl
+g++ -std=c++11 mlr_mcl.cpp ktn.cpp read_ktn.cpp utils.cpp -o mlr_mcl
 
 Execute with e.g.:
-./mlr_mcl 22659 34145 1.5 0.5 10 4 1.D-06 1.D-06
+./mlr_mcl 22659 34145 1.5 0.5 10 4 1.D-06 1.D-06 19
 
 Daniel J. Sharpe
 April 2019
 */
 
-
 #include "read_ktn.h"
+#include "ktn.h"
+#include "utils.h"
 #include <iostream>
 #include <string>
 #include <array>
 #include <vector>
+#include <algorithm>
+#include <numeric>
 
 using namespace std;
-
-struct Node;
-
-struct Edge {
-    int ts_id;
-    double w;
-    bool deadts = false;
-    Node *to_node;
-    Node *from_node;
-    Edge *next_to;
-    Edge *next_from;
-};
-
-struct Node {
-    int min_id;
-    Edge *top_to;
-    Edge *top_from;
-};
-
-// structure containing the kinetic transition network
-struct Network {
-    Network(int,int);
-    void add_to_edge(int,int);
-    void add_from_edge(int,int);
-    vector<Node> min_nodes;
-    vector<Edge> ts_edges;
-};
-
-Network::Network(int nmin, int nts) {
-    min_nodes.resize(nmin);
-    ts_edges.resize(2*nts);
-}
-
-// edge j goes TO node i
-void Network::add_to_edge(int i, int j) {
-    if (min_nodes[i].top_to != nullptr) {
-        ts_edges[j].next_to = min_nodes[i].top_to; }
-    min_nodes[i].top_to = &ts_edges[j];
-}
-
-// edge j goes FROM node i
-void Network::add_from_edge(int i, int j) {
-    if (min_nodes[i].top_from != nullptr) {
-        ts_edges[j].next_from = min_nodes[i].top_from; }
-    min_nodes[i].top_from = &ts_edges[j];
-}
-
-// set up the kinetic transition network
-void setup_network(Network& ktn, int nmin, int nts, vector<pair<int,int>> ts_conns, \
-                   vector<double> ts_weights) {
-
-    for (int i=0;i<nmin;i++) {
-        ktn.min_nodes[i].min_id = i+1;
-    }
-    for (int i=0;i<nts;i++) {
-        ktn.ts_edges[2*i].ts_id = i+1;
-        ktn.ts_edges[(2*i)+1].ts_id = i+1;
-        if (ts_conns[i].first == ts_conns[i].second) {
-            ktn.ts_edges[2*i].deadts = true;
-            ktn.ts_edges[(2*i)+1].deadts = true;
-            continue; }
-        ktn.ts_edges[2*i].w = ts_weights[2*i];
-        ktn.ts_edges[(2*i)+1].w = ts_weights[(2*i)+1];
-        ktn.ts_edges[2*i].from_node = &ktn.min_nodes[ts_conns[i].first-1];
-        ktn.ts_edges[2*i].to_node = &ktn.min_nodes[ts_conns[i].second-1];
-        ktn.ts_edges[(2*i)+1].from_node = &ktn.min_nodes[ts_conns[i].second-1];
-        ktn.ts_edges[(2*i)+1].to_node = &ktn.min_nodes[ts_conns[i].first-1];
-
-        ktn.add_to_edge(ts_conns[i].second-1,2*i);
-        ktn.add_from_edge(ts_conns[i].first-1,2*i);
-        ktn.add_to_edge(ts_conns[i].first-1,(2*i)+1);
-        ktn.add_from_edge(ts_conns[i].second-1,(2*i)+1);
-    }
-}
 
 // class for multi-level regularised Markov clustering (MLR-MCL)
 class MLR_MCL {
 
+    typedef vector<vector<pair<int,int>>> nodemap;
+
     public:
-    MLR_MCL(double,double,int,int,double,double);
+    MLR_MCL(double,double,int,int,double,double,int,int);
     ~MLR_MCL();
-    void run_mcl();
+    void run_mcl(Network&);
 
     double r; double b; double eps; double tau;
-    int n_C; int n_cur;
+    int n_C; int n_cur; int seed; int min_C;
 
     private:
-    void coarsen_graph();
+    void coarsen_graph(Network&);
+    void heavy_edge_matching(Network&);
     void construct_matrix();
     void prune();
     void regularise();
     void expand();
     void inflate();
+
+    nodemap nodemap1; nodemap nodemap2;
 };
 
-MLR_MCL::MLR_MCL(double d1,double d2,int i1,int i2,double d3, double d4) : \
-                r(d1),b(d2),n_C(i1),n_cur(i2),eps(d3),tau(d4) {};
+MLR_MCL::MLR_MCL(double d1,double d2,int i1,int i2,double d3, double d4, int i3, int i4) : \
+                r(d1),b(d2),n_C(i1),n_cur(i2),eps(d3),tau(d4),seed(i3),min_C(i4) {
+
+    nodemap1.resize(n_C); nodemap2.resize(n_C);
+};
+
 MLR_MCL::~MLR_MCL() {};
 
-void MLR_MCL::run_mcl() {
-
+void MLR_MCL::run_mcl(Network &ktn) {
+    coarsen_graph(ktn);
 }
 
 // heavy edge matching for graph coarsening
-//pair<vector<int>,vector<int>> heavy_edge_matching() {
-//}
+void MLR_MCL::heavy_edge_matching(Network &ktn) {
+    Edge *edgeptr;
+    vector<int> node_ids(ktn.n_nodes);
+    iota(begin(node_ids),end(node_ids),0);
+    random_shuffle(begin(node_ids),end(node_ids));
+    for (int i=0;i<ktn.n_nodes;i++) {
+        ktn.min_nodes[i].hem_flag = false; }
+    for (int i=0;i<ktn.n_nodes;i++) {
+        if ((ktn.min_nodes[i].hem_flag) || (ktn.min_nodes[i].deleted)) { continue; } // node already matched or has been deleted
+        else { ktn.min_nodes[i].hem_flag = true; }
+        // find the neighbour FROM node i with largest weight
 
-// recursive function for coarsening of the graph
-void MLR_MCL::coarsen_graph() {
+        int j = 2;
+//        ktn.merge_nodes(i,j);
+        break;
+    }
+}
 
+// function for coarsening of the graph
+void MLR_MCL::coarsen_graph(Network &ktn) {
+    int i=0;
+    do {
+        heavy_edge_matching(ktn);
+        i++;
+    } while ((i < n_C) && (ktn.n_nodes > min_C));
 }
 
 // construct a sparse matrix for matrix multiplication
@@ -171,12 +128,16 @@ int main(int argc, char** argv) {
     int n_cur = stoi(argv[6]); // no. of curtailed MCL iterations for coarsened graphs
     double eps = stod(argv[7]); // threshold for pruning
     double tau = stod(argv[8]); // lag time for estimating transition matrix from transition rate matrix
+    int seed = stoi(argv[9]); // random seed
+    int min_C; // min. no. of nodes in coarsened graph
+    if (argc > 10) { min_C = stoi(argv[10]); } else { min_C = 0; }
 
     vector<pair<int,int>> ts_conns = Read_ktn::read_ts_conns(nts);
     vector<double> ts_weights = Read_ktn::read_ts_weights(nts);
 
     Network ktn(nmin,nts);
-    setup_network(ktn,nmin,nts,ts_conns,ts_weights);
+    Network::setup_network(ktn,nmin,nts,ts_conns,ts_weights);
+    ts_conns.resize(0); ts_weights.resize(0);
 
     // TESTS
     cout << ktn.min_nodes[3].min_id << " (should be 4)" << endl;
@@ -196,9 +157,33 @@ int main(int argc, char** argv) {
         cout << edgeptr->ts_id << "  " << edgeptr->w << "    " << edgeptr->from_node->min_id << " " << edgeptr->to_node->min_id << endl;
         edgeptr = edgeptr->next_from;
     } while (edgeptr != nullptr);
+    cout << "now deleting all edges pointing TO node 1..." << endl;
+    edgeptr = ktn.min_nodes[i].top_to;
+    Edge **edgeptrptr = &ktn.min_nodes[i].top_to;
+    cout << "edgeptrptr initially points to: " << (*edgeptrptr)->ts_id << endl;
+    do {
+        cout << "deleting edge, ts_id " << edgeptr->ts_id << endl;
+        ktn.del_to_edge(i);
+        edgeptr = edgeptr->next_to;
+        if ((*edgeptrptr) != nullptr) {
+            cout << "edgeptrptr now points to: " << (*edgeptrptr)->ts_id << endl;
+        } else {
+            cout << "edgeptrptr now points to nullptr" << endl;
+        }
+    } while (edgeptr != nullptr);
+    cout << "try to delete an edge pointing TO node 1 (no such edge exists now)..." << endl;
+    try {
+        ktn.del_to_edge(i);
+    } catch (Network::Ktn_exception& ktn_exc) {
+        cout << "I caught a KTN_exception!" << endl;
+    }
 
-    ts_conns.resize(0); ts_weights.resize(0);
 
+    MLR_MCL mcl_obj (r,b,n_C,n_cur,eps,tau,seed,min_C);
+    mcl_obj.run_mcl(ktn);
 
-    MLR_MCL mcl_obj (r,b,n_C,n_cur,eps,tau);
+    cout << "merging nodes 1 and 2..." << endl;
+    ktn.merge_nodes(1,2);
+    cout << "merging nodes 6 and 7..." << endl;
+    ktn.merge_nodes(5,6);
 }
