@@ -40,6 +40,10 @@ struct Network {
     void add_from_edge(int,int);
     void del_to_edge(int);
     void del_from_edge(int);
+    void del_spec_to_edge(int,int);
+    void del_spec_from_edge(int,int);
+    void update_to_edge(int,int);
+    void update_from_edge(int,int);
     void merge_nodes(int,int);
     static void setup_network(Network&,int,int,vector<pair<int,int>>,vector<double>);
     vector<Node> min_nodes;
