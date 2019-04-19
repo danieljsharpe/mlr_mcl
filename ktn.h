@@ -2,6 +2,9 @@
 Custom data structure for representing and reading in a ktn
 */
 
+#ifndef __KTN_H_INCLUDED__
+#define __KTN_H_INCLUDED__
+
 #include <exception>
 #include <vector>
 
@@ -53,5 +56,7 @@ struct Network {
         const char * what () const throw () { return "KTN Exception"; }
     };
 
-    int n_nodes; int n_edges;
+    int n_nodes; int n_edges; int tot_nodes; int tot_edges; int n_dead=0;
 };
+
+#endif

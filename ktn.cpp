@@ -9,7 +9,7 @@ using namespace std;
 Network::Network(int nmin, int nts) {
     min_nodes.resize(nmin);
     ts_edges.resize(2*nts);
-    n_nodes = 0; n_edges = 0;
+    n_nodes = 0; n_edges = 0; tot_nodes = 0; tot_edges = 0;
 }
 
 Network::~Network() {}
@@ -179,12 +179,13 @@ void Network::merge_nodes(int i, int j) {
     edgeptr = min_nodes[j].top_to;
     if (edgeptr != nullptr) {
     do {
-        if (edgeptr->to_node->min_id==i) { edgeptr = edgeptr->next_to; continue; }
-        if (find(node_i_nbrs_to.begin(),node_i_nbrs_to.end(),edgeptr->to_node->min_id) != \
-            node_i_nbrs_to.end()) { // this node TO j is also already a node TO i
-// need to know posn of corresponding ts_pos entry in ts_nbrs_to
-//            ts_edges[edgeptr->ts_id].w += ;
-            cout << "node TO j is also already a node TO i" << endl;
+        if (edgeptr->from_node->min_id==i) { edgeptr = edgeptr->next_to; continue; }
+        vector<int>::iterator it_find = find(node_i_nbrs_to.begin(),node_i_nbrs_to.end(), \
+            edgeptr->from_node->min_id);
+        if (it_find != node_i_nbrs_to.end()) { // this node TO j is also already a node TO i
+            int nbr_idx = distance(node_i_nbrs_to.begin(),it_find);
+            ts_edges[ts_nbrs_to[nbr_idx]].w += ts_edges[edgeptr->ts_pos].w;
+            del_spec_to_edge(j,edgeptr->ts_id); // quack will this cause problems?
         } else { // this node TO j does not already exist TO i
             to_edges_toadd.emplace_back(edgeptr->ts_pos);
         }
@@ -192,17 +193,18 @@ void Network::merge_nodes(int i, int j) {
     } while (edgeptr != nullptr);
     }
     for (auto ts_pos: to_edges_toadd) {
-//        cout << "    updating edge to be TO i = " << i+1 << " ts_id " << ts_edges[ts_pos].ts_id << " ts_pos " << ts_pos << endl;
         update_to_edge(i,ts_pos); }
-    cout << "finished updating TO edges" << endl;
     // merge FROM edges of j to node i
     edgeptr = min_nodes[j].top_from;
     if (edgeptr != nullptr) {
     do {
-        if (edgeptr->from_node->min_id==i) { edgeptr = edgeptr->next_from; continue; }
-        if (find(node_i_nbrs_from.begin(),node_i_nbrs_from.end(),edgeptr->from_node->min_id) != \
-            node_i_nbrs_from.end()) {
-            cout << "honk" << endl;
+        if (edgeptr->to_node->min_id==i) { edgeptr = edgeptr->next_from; continue; }
+        vector<int>::iterator it_find = find(node_i_nbrs_from.begin(),node_i_nbrs_from.end(), \
+            edgeptr->to_node->min_id);
+        if (it_find != node_i_nbrs_from.end()) {
+            int nbr_idx = distance(node_i_nbrs_from.begin(),it_find);
+            ts_edges[ts_nbrs_from[nbr_idx]].w += ts_edges[edgeptr->ts_pos].w;
+            del_spec_from_edge(j,edgeptr->ts_id); // quack will this cause problems?
         } else {
             from_edges_toadd.emplace_back(edgeptr->ts_pos);
         }
@@ -212,6 +214,7 @@ void Network::merge_nodes(int i, int j) {
     for (auto ts_pos: from_edges_toadd) {
         update_from_edge(i,ts_pos); }
     // now delete node j from the network
+    cout << "      deleting node " << j << endl;
     del_node(j);
 }
 
@@ -219,7 +222,7 @@ void Network::merge_nodes(int i, int j) {
 void Network::setup_network(Network& ktn, int nmin, int nts, vector<pair<int,int>> ts_conns, \
                    vector<double> ts_weights) {
 
-    ktn.n_nodes = nmin;
+    ktn.n_nodes = nmin; ktn.tot_nodes = nmin; ktn.n_edges = 2*nts; ktn.tot_edges = 2*nts;
     for (int i=0;i<nmin;i++) {
         ktn.min_nodes[i].min_id = i+1;
     }
@@ -231,6 +234,8 @@ void Network::setup_network(Network& ktn, int nmin, int nts, vector<pair<int,int
         if (ts_conns[i].first == ts_conns[i].second) {
             ktn.ts_edges[2*i].deadts = true;
             ktn.ts_edges[(2*i)+1].deadts = true;
+            ktn.n_dead++;
+            ktn.n_edges = ktn.n_edges-2;
             continue; }
         ktn.ts_edges[2*i].w = ts_weights[2*i];
         ktn.ts_edges[(2*i)+1].w = ts_weights[(2*i)+1];
@@ -243,6 +248,8 @@ void Network::setup_network(Network& ktn, int nmin, int nts, vector<pair<int,int
         ktn.add_from_edge(ts_conns[i].first-1,2*i);
         ktn.add_to_edge(ts_conns[i].first-1,(2*i)+1);
         ktn.add_from_edge(ts_conns[i].second-1,(2*i)+1);
+
+        // how to account for if there are 2 edges connecting the same pair of nodes (need to sum weights)?
     }
 }
 
