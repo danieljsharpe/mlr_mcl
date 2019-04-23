@@ -214,7 +214,6 @@ void Network::merge_nodes(int i, int j) {
     for (auto ts_pos: from_edges_toadd) {
         update_from_edge(i,ts_pos); }
     // now delete node j from the network
-    cout << "      deleting node " << j << endl;
     del_node(j);
 }
 
