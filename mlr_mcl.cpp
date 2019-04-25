@@ -32,6 +32,7 @@ using namespace std;
 class MLR_MCL {
 
     typedef vector<vector<pair<int,int>>> nodemap_vec;
+    typedef pair<vector<pair<double,int>>,vector<int>> Csr_mtx; // matrix in CSR sparse format
 
     public:
     MLR_MCL(double,double,int,int,double,double,int,int);
@@ -45,7 +46,7 @@ class MLR_MCL {
     void coarsen_graph(Network&);
     void heavy_edge_matching(Network&,int);
     void get_matrix_exp(Network&);
-    void construct_matrix(Network&);
+    Csr_mtx get_sparse_mtx(Network&);
     void prune();
     void regularise();
     void expand();
@@ -141,14 +142,17 @@ void MLR_MCL::coarsen_graph(Network &ktn) {
 // call external Python script to compute the matrix exponential of the coarsened graph.
 // Return the initial, coarsened column-stochastic flow matrix
 void MLR_MCL::get_matrix_exp(Network &ktn) {
+
+    Csr_mtx k_mtx_sp = get_sparse_mtx(ktn); // sparse representation of transition rate matrix
+    cout << "Calculated sparse transition rate matrix" << endl;
     int ret_val;
     const char *py_script_name = "calc_matrix_exp"; const char *py_func_name = "calc_expm";
-    cout << "I am going to calculate the matrix exponential" << endl;
     setenv("PYTHONPATH",".",1); // set environment variable correctly (here, calc_matrix_exp.py is in current dir)
     PyObject *pName=NULL, *pModule=NULL, *pFunc=NULL; // names of Python script, module and function, respectively
-    PyObject *pArgs=NULL, *pValue=NULL; // names of arguments for and return value of the Python function, respectively
+    PyObject *pArgs=NULL, *pRetval=NULL; // names of arguments for and return value of the Python function, respectively
+    // PyObject objs for defining arguments to the Python function
+    PyObject *pValue=NULL, *pValue2=NULL, *pValue3=NULL, *pValue4=NULL;
     Py_Initialize(); // initialise the interpreter
-    printf("hello world! (from the initialiser)\n");
     pName = PyString_FromString(py_script_name); // name of Python script
     if (pName==NULL) { goto error; }
     pModule = PyImport_Import(pName); // import corresponding module
@@ -157,28 +161,64 @@ void MLR_MCL::get_matrix_exp(Network &ktn) {
     pFunc = PyObject_GetAttrString(pModule,py_func_name); // retrieve desired object from module
     if (pFunc==NULL) { goto error; }
     if (pFunc && PyCallable_Check(pFunc)) { // Python object exists and is callable
-        cout << "Now I will call the Python function..." << endl;
-        int arg = 3;
-        pArgs = PyTuple_New(1); // tuple of args. Here, pFunc takes a single argument
-        pValue = PyInt_FromLong(arg); // each argument is a Python object
-        PyTuple_SetItem(pArgs,0,pValue); // set the first value of the pArgs tuple
-        pValue = PyObject_CallObject(pFunc,pArgs); // call the Python function
+        pArgs = PyTuple_New(4); // tuple of args. Here, pFunc takes four args; 3 arrays and 1 double
+        pRetval = PyInt_FromLong(0); // dummy
+        // each arg is a Python object. Here, we want to pass 3 lists describing the sparse matrix to the Python function object
+        pValue = PyList_New(k_mtx_sp.first.size());
+        pValue2 = PyList_New(k_mtx_sp.first.size());
+        pValue3 = PyList_New(k_mtx_sp.second.size());
+        for (int i=0;i<k_mtx_sp.first.size();i++) {
+            PyList_SetItem(pValue,i,PyFloat_FromDouble(k_mtx_sp.first[i].first));
+            PyList_SetItem(pValue2,i,PyInt_FromLong(k_mtx_sp.first[i].second));
+        }
+        for (int i=0;i<k_mtx_sp.second.size();i++) {
+            PyList_SetItem(pValue3,i,PyInt_FromLong(k_mtx_sp.second[i]));
+        }
+        pValue4 = PyFloat_FromDouble(tau);
+        // set values of the pArgs tuple
+        PyTuple_SetItem(pArgs,0,pValue); PyTuple_SetItem(pArgs,1,pValue2); PyTuple_SetItem(pArgs,2,pValue3);
+        PyTuple_SetItem(pArgs,3,pValue4);
+        pRetval = PyObject_CallObject(pFunc,pArgs); // call the Python function
+        cout << "I'm back outside of the Python script" << endl;
         if (pValue==NULL) { goto error; } // Python function has a return value, so should not return NULL
-        ret_val = int(PyFloat_AsDouble(pValue));
-        Py_DECREF(pFunc); Py_DECREF(pModule); Py_DECREF(pArgs); Py_DECREF(pValue);
+        ret_val = int(PyFloat_AsDouble(pRetval)); // extract the return value of the Python function
+        Py_DECREF(pValue); Py_DECREF(pValue2); Py_DECREF(pValue3); Py_DECREF(pValue4);
+        Py_DECREF(pFunc); Py_DECREF(pModule); Py_DECREF(pArgs); Py_DECREF(pRetval);
     } else { cout << "Error: could not find Python function object" << endl; exit(EXIT_FAILURE); }
-    error:
-        cout << "Checking error" << endl;
+    error: // check if error has occurred in use of Python interpreter
         if (PyErr_Occurred()) {
             cout << "Fatal error in Python interpreter" << endl; exit(EXIT_FAILURE); }
-    cout << "Goodbye" << endl;
-    Py_Finalize();
+    Py_Finalize(); // finished with Python interpreter
     cout << "Return value from py function was: " << ret_val << endl;
 }
 
-// construct a sparse matrix for matrix multiplication
-void MLR_MCL::construct_matrix(Network &ktn) {
+// construct a sparse matrix representation of the network
+//MLR_MCL::Csr_mtx MLR_MCL::get_sparse_mtx(Network &ktn) {
+MLR_MCL::Csr_mtx MLR_MCL::get_sparse_mtx(Network &ktn) {
 
+    // elements of the transition rate matrix, row-major order, and corresponding column indices
+    vector<pair<double,int>> k_elems_cols;
+    vector<int> k_rl; // cumulative row lengths of transition rate matrix
+    Edge *edgeptr;
+    // set the elements of the (flattened) transition rate matrix
+    for (int i=0;i<ktn.tot_nodes;i++) {
+        int rl=0;
+        if (ktn.min_nodes[i].deleted) { continue; }
+        edgeptr = ktn.min_nodes[i].top_to;
+        if (edgeptr!=nullptr) {
+        do {
+            // note that the column indices are not in order
+            k_elems_cols.emplace_back(make_pair(edgeptr->w,edgeptr->from_node->min_id-1));
+            rl++;
+            edgeptr = edgeptr->next_to;
+        } while (edgeptr != nullptr);
+        }
+        k_rl.emplace_back(rl);
+    }
+    for (vector<int>::iterator it=k_rl.begin()+1;it!=k_rl.end();it++) {
+        *it += *(it-1); }
+    Csr_mtx sparse_mtx = make_pair(k_elems_cols,k_rl);
+    return sparse_mtx;
 }
 
 // prune small values from the transition matrix
@@ -235,7 +275,6 @@ int main(int argc, char** argv) {
     ts_conns.resize(0); ts_weights.resize(0);
 
 //    run_debug_tests(ktn);
-
 
     MLR_MCL mcl_obj (r,b,n_C,n_cur,eps,tau,seed,min_C);
     mcl_obj.run_mcl(ktn);
