@@ -98,29 +98,31 @@ void run_debug_tests(Network &ktn) {
     }
 
     // test merging of nodes
-    cout << "\n\nmerging nodes 6 and 7..." << endl;
-    cout << "\noriginally edges pointing TO node 6:" << endl;
-    edgeptr = ktn.min_nodes[5].top_to;
+    int n1, n2;
+    n1 = 6; n2 = 7; // min ID's of nodes to be merged
+    cout << "\n\nmerging nodes " << n1 << " and " << n2 << "..." << endl;
+    cout << "\noriginally edges pointing TO node " << n1 << ":" << endl;
+    edgeptr = ktn.min_nodes[n1-1].top_to;
     print_edgeptr_info(edgeptr,1);
-    cout << "\noriginally edges pointing FROM node 6:" << endl;
-    edgeptr = ktn.min_nodes[5].top_from;
+    cout << "\noriginally edges pointing FROM node " << n1 << ":" << endl;
+    edgeptr = ktn.min_nodes[n1-1].top_from;
     print_edgeptr_info(edgeptr,2);
-    cout << "\noriginally edges pointing TO node 7:" << endl;
-    edgeptr = ktn.min_nodes[6].top_to;
+    cout << "\noriginally edges pointing TO node " << n2 << ":" << endl;
+    edgeptr = ktn.min_nodes[n2-1].top_to;
     print_edgeptr_info(edgeptr,1);
-    cout << "\noriginally edges pointing FROM node 7:" << endl;
-    edgeptr = ktn.min_nodes[6].top_from;
+    cout << "\noriginally edges pointing FROM node " << n2 << ":" << endl;
+    edgeptr = ktn.min_nodes[n2-1].top_from;
     print_edgeptr_info(edgeptr,2);
-    cout << "\nnow merge nodes 6 & 7..." << endl;
-    ktn.merge_nodes(5,6);
-    cout << "\nnew edges pointing TO node 6:" << endl;
-    edgeptr = ktn.min_nodes[5].top_to;
+    cout << "\nnow merge nodes " << n1 << " & " << n2 << "..." << endl;
+    ktn.merge_nodes(n1-1,n2-1);
+    cout << "\nnew edges pointing TO node " << n1 << ":" << endl;
+    edgeptr = ktn.min_nodes[n1-1].top_to;
     print_edgeptr_info(edgeptr,1);
-    cout << "\nnode 7 has no TO edges? " << (ktn.min_nodes[6].top_to==nullptr) << \
-            " node 7 is deleted? " << ktn.min_nodes[6].deleted << endl;
-    cout << "\n new edges pointing FROM node 6:" << endl;
-    edgeptr = ktn.min_nodes[5].top_from;
+    cout << "\nnode " << n2 << " has no TO edges? " << (ktn.min_nodes[n2-1].top_to==nullptr) << \
+            " node " << n2 << " is deleted? " << ktn.min_nodes[n2-1].deleted << endl;
+    cout << "\n new edges pointing FROM node " << n1 << ":" << endl;
+    edgeptr = ktn.min_nodes[n1-1].top_from;
     print_edgeptr_info(edgeptr,2);
-    cout << "\nnode 7 has no FROM edges? " << (ktn.min_nodes[6].top_from==nullptr) << endl;
+    cout << "\nnode " << n2 << " has no FROM edges? " << (ktn.min_nodes[n2-1].top_from==nullptr) << endl;
 
 }
