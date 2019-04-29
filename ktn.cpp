@@ -144,16 +144,9 @@ void Network::del_spec_from_edge(int i, int j) {
 void Network::update_to_edge(int i, int j) {
     Edge *edgeptr;
     edgeptr = &ts_edges[j];
-//    cout << "  updating edge, originally:  ts_id " << edgeptr->ts_id << " FROM " << edgeptr->from_node->min_id << " TO " << edgeptr->to_node->min_id << endl;
     int old_to = edgeptr->to_node->min_id;
     edgeptr->to_node = &min_nodes[i];
-//    cout << "  new TO node: " << edgeptr->to_node->min_id << endl;
-//    if (edgeptr->next_to != nullptr) {
-//        cout << "  ts_id of next_to: " << edgeptr->next_to->ts_id << endl;
-//    } else { cout << "  next_to is nullptr" << endl; }
-//    cout << "  deleting edge in list of node " << old_to << endl;
     del_spec_to_edge(old_to-1,edgeptr->ts_id);
-//    cout << "  adding edge between nodes " << i+1 << " and " << j+1 << endl;
     add_to_edge(i,j);
 }
 
@@ -171,7 +164,6 @@ void Network::update_from_edge(int i, int j) {
 // for the constituent pair of nodes. cf node contraction operation. Node j is merged into node i.
 void Network::merge_nodes(int i, int j) {
     if ((min_nodes[i].deleted) || (min_nodes[j].deleted)) { throw Ktn_exception(); }
-//    cout << " Merging nodes " << i+1 << " and " << j+1 << endl;
     Edge *edgeptr;
     // get all TO and FROM neighbours for node i (need to check these against TO and FROM neighbours for node j)
     vector<int> node_i_nbrs_to; vector<int> node_i_nbrs_from;
@@ -203,7 +195,7 @@ void Network::merge_nodes(int i, int j) {
     do {
 //        cout << "ts_id: " << edgeptr->ts_id << " w " << edgeptr->w << " FROM " << edgeptr->from_node->min_id << \
                 " TO " << edgeptr->to_node->min_id << endl;
-        if (edgeptr->from_node->min_id==i+1) { edgeptr = edgeptr->next_to; continue; }
+        if (edgeptr->from_node->min_id==i+1 || edgeptr->from_node->deleted) { edgeptr = edgeptr->next_to; continue; }
         vector<int>::iterator it_find = find(node_i_nbrs_to.begin(),node_i_nbrs_to.end(), \
             edgeptr->from_node->min_id);
         if (it_find != node_i_nbrs_to.end()) { // this node TO j is also already a node TO i
@@ -224,7 +216,7 @@ void Network::merge_nodes(int i, int j) {
     edgeptr = min_nodes[j].top_from;
     if (edgeptr != nullptr) {
     do {
-        if (edgeptr->to_node->min_id==i+1) { edgeptr = edgeptr->next_from; continue; }
+        if (edgeptr->to_node->min_id==i+1 || edgeptr->to_node->deleted) { edgeptr = edgeptr->next_from; continue; }
         vector<int>::iterator it_find = find(node_i_nbrs_from.begin(),node_i_nbrs_from.end(), \
             edgeptr->to_node->min_id);
         if (it_find != node_i_nbrs_from.end()) {
@@ -287,8 +279,9 @@ void Network::setup_network(Network& ktn, int nmin, int nts, vector<pair<int,int
                     [edgeptr] (pair<int,int> elem) { return elem.first==edgeptr->from_node->min_id; } );
                 if (it_find != to_nbrs.end()) {
                     int idx = distance(to_nbrs.begin(),it_find);
-                    ktn.ts_edges[to_nbrs[idx].second].w += ktn.ts_edges[edgeptr->ts_pos].w;
-                    ktn.ts_edges[to_nbrs[idx].second+1].w += ktn.ts_edges[edgeptr->ts_pos+1].w; // ?
+// for now let's just delete the newfound edge
+//                    ktn.ts_edges[to_nbrs[idx].second].w += ktn.ts_edges[edgeptr->ts_pos].w;
+//                    ktn.ts_edges[to_nbrs[idx].second+1].w += ktn.ts_edges[edgeptr->ts_pos+1].w; // ?
                     // what about the other edges?
                     ktn.del_spec_to_edge(edgeptr->to_node->min_id-1,edgeptr->ts_id);
                     ktn.del_spec_from_edge(edgeptr->to_node->min_id-1,edgeptr->ts_id);

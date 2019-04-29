@@ -113,7 +113,7 @@ void MLR_MCL::heavy_edge_matching(Network &ktn, int i_C) {
 //            cout << "    finished merging nodes" << endl;
             // update nodemaps
             nodemap[i_C].emplace_back(make_pair(node_ids[i],matchnode_id));
-        } else { ktn.min_nodes[node_ids[i]-1].deleted = true; ktn.n_nodes--; }
+        } else { ktn.del_node(node_ids[i]-1); }
     }
 }
 
@@ -136,25 +136,17 @@ void MLR_MCL::coarsen_graph(Network &ktn) {
 void MLR_MCL::get_matrix_exp(Network &ktn) {
 /*
     Edge *edgeptr;
-    cout << "looping over all TO neighbours: " << endl;
+    cout << "looping over all FROM neighbours: " << endl;
     for (int i=0;i<ktn.tot_nodes;i++) {
         if (ktn.min_nodes[i].deleted) { continue; }
         cout << " node " << ktn.min_nodes[i].min_id << endl;
         edgeptr = ktn.min_nodes[i].top_from;
+        if (edgeptr!=nullptr) {
         do {
-            cout << "  FROM " << edgeptr->from_node->min_id << " TO " << edgeptr->to_node->min_id << " w " << edgeptr->w << endl;
+            cout << "  FROM " << edgeptr->from_node->min_id << " TO " << edgeptr->to_node->min_id << " w " << \
+                    edgeptr->w << "  TO node is deleted? " << edgeptr->to_node->deleted << endl;
             edgeptr = edgeptr->next_from; } while (edgeptr!=nullptr);
-    }
-*/
-/*
-    cout << "\nlooping over all FROM neighbours: " << endl;
-    for (int i=0;i<ktn.tot_nodes;i++) {
-        cout << " node " << ktn.min_nodes[i].min_id << endl;
-        if (ktn.min_nodes[i].deleted) { continue; }
-        edgeptr = ktn.min_nodes[i].top_to;
-        do {
-            cout << "  FROM " << edgeptr->from_node->min_id << " TO " << edgeptr->to_node->min_id << " w " << edgeptr->w << endl;
-            edgeptr = edgeptr->next_to; } while (edgeptr!=nullptr);
+        } else { cout << "  node has no FROM nbrs!" << endl; }
     }
 */
     Csr_mtx k_mtx_sp = get_init_sparse_mtx(ktn); // sparse representation of transition rate matrix
@@ -216,14 +208,17 @@ MLR_MCL::Csr_mtx MLR_MCL::get_init_sparse_mtx(Network &ktn) {
     map<int,int> k_min2col; // mapping of min_id's to column indices
     Edge *edgeptr;
     // set the elements of the (flattened) transition rate matrix
-    int z=0;
+    int z=0, dconn=0;
     for (int i=0;i<ktn.tot_nodes;i++) {
         int rl=0;
         if (ktn.min_nodes[i].deleted) { continue; }
         edgeptr = ktn.min_nodes[i].top_to;
+        bool edge_exist = false;
         if (edgeptr!=nullptr) {
         do {
             // note that the column indices/min id's are not initially in order
+            if (edgeptr->from_node->deleted) { edgeptr = edgeptr->next_to; continue; }
+            if (!edge_exist) { edge_exist = true; }
             k_elems.emplace_back(edgeptr->w); k_minids.emplace_back(edgeptr->from_node->min_id);
             try {
                 int dummy = k_min2col.at(edgeptr->from_node->min_id);
@@ -233,9 +228,11 @@ MLR_MCL::Csr_mtx MLR_MCL::get_init_sparse_mtx(Network &ktn) {
             edgeptr = edgeptr->next_to;
         } while (edgeptr != nullptr);
         }
+        if (!edge_exist) { dconn++; } // this node is not deleted but is disconnected
         k_rl.emplace_back(rl);
     }
     cout << "number of unique col_idcs: " << z << endl;
+    cout << "number of disconnected nodes: " << dconn << endl;
 //    for (int i=0;i<k_minids.size();i++) { cout << k_minids[i] << endl; }
     for (vector<int>::iterator it=k_rl.begin()+1;it!=k_rl.end();it++) {
         *it += *(it-1); }
@@ -316,7 +313,7 @@ int main(int argc, char** argv) {
     Network::setup_network(ktn,nmin,nts,ts_conns,ts_weights);
     ts_conns.resize(0); ts_weights.resize(0);
 
-    run_debug_tests(ktn);
+//    run_debug_tests(ktn);
 
     MLR_MCL mcl_obj (r,b,n_C,n_cur,eps,tau,seed,min_C);
     mcl_obj.run_mcl(ktn);
