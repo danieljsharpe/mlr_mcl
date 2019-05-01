@@ -52,7 +52,7 @@ class MLR_MCL {
     void prune();
     void regularise();
     void expand();
-    void inflate();
+    void inflate(Csr_mtx&);
     void project_flow();
     void interpret_clust();
 
@@ -134,7 +134,7 @@ void MLR_MCL::coarsen_graph(Network &ktn) {
 // call external Python script to compute the matrix exponential of the coarsened graph.
 // Return the initial, coarsened column-stochastic flow matrix
 void MLR_MCL::get_matrix_exp(Network &ktn) {
-/*
+
     Edge *edgeptr;
     cout << "looping over all FROM neighbours: " << endl;
     for (int i=0;i<ktn.tot_nodes;i++) {
@@ -148,9 +148,11 @@ void MLR_MCL::get_matrix_exp(Network &ktn) {
             edgeptr = edgeptr->next_from; } while (edgeptr!=nullptr);
         } else { cout << "  node has no FROM nbrs!" << endl; }
     }
-*/
+    cout << "\n\n\n\n" << endl;
+
+    cout << "Calculating sparse transition rate matrix" << endl;
     Csr_mtx k_mtx_sp = get_init_sparse_mtx(ktn); // sparse representation of transition rate matrix
-    cout << "Calculated sparse transition rate matrix" << endl;
+    cout << "Setting up Python interpreter" << endl;
     int ret_val;
     const char *py_script_name = "calc_matrix_exp"; const char *py_func_name = "calc_expm";
     setenv("PYTHONPATH",".",1); // set environment variable correctly (here, calc_matrix_exp.py is in current dir)
@@ -216,6 +218,7 @@ MLR_MCL::Csr_mtx MLR_MCL::get_init_sparse_mtx(Network &ktn) {
         bool edge_exist = false;
         if (edgeptr!=nullptr) {
         do {
+            if (edgeptr->from_node->min_id-1==i) { throw Network::Ktn_exception(); }
             // note that the column indices/min id's are not initially in order
             if (edgeptr->from_node->deleted) { edgeptr = edgeptr->next_to; continue; }
             if (!edge_exist) { edge_exist = true; }
@@ -229,7 +232,7 @@ MLR_MCL::Csr_mtx MLR_MCL::get_init_sparse_mtx(Network &ktn) {
         } while (edgeptr != nullptr);
         }
         if (!edge_exist) { dconn++; } // this node is not deleted but is disconnected
-        k_rl.emplace_back(rl);
+        else { k_rl.emplace_back(rl); }
     }
     cout << "number of unique col_idcs: " << z << endl;
     cout << "number of disconnected nodes: " << dconn << endl;
@@ -241,6 +244,10 @@ MLR_MCL::Csr_mtx MLR_MCL::get_init_sparse_mtx(Network &ktn) {
     int i=0;
     for (auto minid: k_minids_sort) {
         if (k_min2col[minid]==-1) { k_min2col[minid] = i; i++; } }
+    map<int,int>::iterator it_map;
+//    for (it_map=k_min2col.begin();it_map!=k_min2col.end();it_map++) {
+//        cout << "  min_id: " << it_map->first << " maps to " << it_map->second << " row length: " << \
+//                k_rl[it_map->second] << endl; }
     for (int i=0;i<k_minids.size();i++) {
         k_elems_cols.emplace_back(make_pair(k_elems[i],k_min2col[k_minids[i]])); }
     Csr_mtx sparse_mtx = make_pair(k_elems_cols,k_rl);
@@ -276,7 +283,7 @@ void MLR_MCL::expand() {
 }
 
 // inflation operation for the transition matrix
-void MLR_MCL::inflate() {
+void MLR_MCL::inflate(Csr_mtx &T_csr) {
 
 }
 

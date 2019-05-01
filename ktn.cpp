@@ -1,7 +1,7 @@
 #include "ktn.h"
 #include <vector>
 #include <algorithm>
-
+#include <math.h>
 #include <iostream>
 
 using namespace std;
@@ -200,7 +200,8 @@ void Network::merge_nodes(int i, int j) {
             edgeptr->from_node->min_id);
         if (it_find != node_i_nbrs_to.end()) { // this node TO j is also already a node TO i
             int nbr_idx = distance(node_i_nbrs_to.begin(),it_find);
-            ts_edges[ts_nbrs_to[nbr_idx]].w += ts_edges[edgeptr->ts_pos].w;
+//            ts_edges[ts_nbrs_to[nbr_idx]].w += ts_edges[edgeptr->ts_pos].w;
+            ts_edges[ts_nbrs_to[nbr_idx]].w = log(exp(ts_edges[ts_nbrs_to[nbr_idx]].w) + exp(ts_edges[edgeptr->ts_pos].w));
 //            cout << "deleting edge FROM " << edgeptr->from_node->min_id << " TO " << j+1 << " because its already connected TO " << i+1 << endl;
 //            del_spec_to_edge(j,edgeptr->ts_id); // quack will this cause problems?  Is WRONG(?)
             del_spec_to_edge(edgeptr->from_node->min_id-1,edgeptr->ts_id);
@@ -221,7 +222,8 @@ void Network::merge_nodes(int i, int j) {
             edgeptr->to_node->min_id);
         if (it_find != node_i_nbrs_from.end()) {
             int nbr_idx = distance(node_i_nbrs_from.begin(),it_find);
-            ts_edges[ts_nbrs_from[nbr_idx]].w += ts_edges[edgeptr->ts_pos].w;
+//            ts_edges[ts_nbrs_from[nbr_idx]].w += ts_edges[edgeptr->ts_pos].w;
+            ts_edges[ts_nbrs_from[nbr_idx]].w = log(exp(ts_edges[ts_nbrs_from[nbr_idx]].w) + exp(ts_edges[edgeptr->ts_pos].w));
 //            del_spec_from_edge(j,edgeptr->ts_id); // quack will this cause problems?
             del_spec_from_edge(edgeptr->to_node->min_id-1,edgeptr->ts_id);
         } else {
