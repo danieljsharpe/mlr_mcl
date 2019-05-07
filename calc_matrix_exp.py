@@ -9,7 +9,7 @@ from scipy.linalg import expm
 
 ''' calculate the exponential of the matrix passed in sparse format, i.e. lists of:
     non-zero elems, column indices for elems, cumulative row lengths '''
-def calc_expm(A,A_ci,A_rl,tau):
+def calc_expm(A,A_ci,A_rl,tau,eps):
     print "lag time is: %E" % tau
     tau = np.float128(tau)
     A = np.array(A,dtype=np.float128)
@@ -17,11 +17,8 @@ def calc_expm(A,A_ci,A_rl,tau):
     A_rl = np.array(A_rl,dtype=int)
     K = np.zeros((len(A_rl),len(A_rl)),dtype=np.float128) # transition rate matrix
     row_no = 0
-    print "dimensions of K:", np.shape(K)
-    print "lengths of arrays:"
-    print np.shape(A)[0], np.shape(A_ci)[0], np.shape(A_rl)[0]
+    print "lengths of arrays:\n", np.shape(A)[0], np.shape(A_ci)[0], np.shape(A_rl)[0]
     for i in range(np.shape(A)[0]):
-#        print "i:", i, "col_idx:", A_ci[i], "row_no:", A_rl[row_no], "    rl:", row_no
         K[A_ci[i],row_no] = tau*np.exp(A[i])
         while True:
             if i==A_rl[row_no]-1 and i<np.shape(A)[0]-1: row_no += 1
@@ -40,6 +37,28 @@ def calc_expm(A,A_ci,A_rl,tau):
     for i in range(np.shape(A_rl)[0]):
 #        print "row:", i, "sum of row:", np.sum(np.sort(T[i,:]).copy())
         assert abs(np.sum(np.sort(T[i,:].copy()))-1.) < 1.0E-04, "Error: row %i of T does not sum to 1" % i
-    # pass matrix back in CSR format
-
-    return 5000
+    # pass matrix back in CSR sparse format
+    Tsp = []
+    Tci = []
+    Trl = np.zeros(np.shape(A_rl)[0],dtype=int)
+    ci = 0 # col index
+    rl = 0 # row length
+    rn = 0 # row no.
+    for t in T.flatten(order="C"):
+        if ci==np.shape(A_rl)[0]: # new row
+            Trl[rn] = rl
+            ci = 0
+            rl = 0
+            rn += 1
+        if t > eps:
+            Tsp.append(t)
+            Tci.append(ci)
+            rl += 1
+        ci += 1
+    Trl[rn] = rl
+    for i in range(1,np.shape(A_rl)[0]):
+        Trl[i] += Trl[i-1]
+    assert Trl[-1]==np.shape(Tsp)[0], "Error: row lengths not consistent with size of transition matrix"
+    Trl = list(Trl)
+    print "Number of non-zero elements of the transition matrix: %i" % np.shape(Tsp)[0]
+    return Tsp, Tci, Trl

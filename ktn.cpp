@@ -193,17 +193,12 @@ void Network::merge_nodes(int i, int j) {
     edgeptr = min_nodes[j].top_to;
     if (edgeptr != nullptr) {
     do {
-//        cout << "ts_id: " << edgeptr->ts_id << " w " << edgeptr->w << " FROM " << edgeptr->from_node->min_id << \
-                " TO " << edgeptr->to_node->min_id << endl;
         if (edgeptr->from_node->min_id==i+1 || edgeptr->from_node->deleted) { edgeptr = edgeptr->next_to; continue; }
         vector<int>::iterator it_find = find(node_i_nbrs_to.begin(),node_i_nbrs_to.end(), \
             edgeptr->from_node->min_id);
         if (it_find != node_i_nbrs_to.end()) { // this node TO j is also already a node TO i
             int nbr_idx = distance(node_i_nbrs_to.begin(),it_find);
-//            ts_edges[ts_nbrs_to[nbr_idx]].w += ts_edges[edgeptr->ts_pos].w;
             ts_edges[ts_nbrs_to[nbr_idx]].w = log(exp(ts_edges[ts_nbrs_to[nbr_idx]].w) + exp(ts_edges[edgeptr->ts_pos].w));
-//            cout << "deleting edge FROM " << edgeptr->from_node->min_id << " TO " << j+1 << " because its already connected TO " << i+1 << endl;
-//            del_spec_to_edge(j,edgeptr->ts_id); // quack will this cause problems?  Is WRONG(?)
             del_spec_to_edge(edgeptr->from_node->min_id-1,edgeptr->ts_id);
         } else { // this node TO j does not already exist TO i
             to_edges_toadd.emplace_back(edgeptr->ts_pos);
@@ -222,9 +217,7 @@ void Network::merge_nodes(int i, int j) {
             edgeptr->to_node->min_id);
         if (it_find != node_i_nbrs_from.end()) {
             int nbr_idx = distance(node_i_nbrs_from.begin(),it_find);
-//            ts_edges[ts_nbrs_from[nbr_idx]].w += ts_edges[edgeptr->ts_pos].w;
             ts_edges[ts_nbrs_from[nbr_idx]].w = log(exp(ts_edges[ts_nbrs_from[nbr_idx]].w) + exp(ts_edges[edgeptr->ts_pos].w));
-//            del_spec_from_edge(j,edgeptr->ts_id); // quack will this cause problems?
             del_spec_from_edge(edgeptr->to_node->min_id-1,edgeptr->ts_id);
         } else {
             from_edges_toadd.emplace_back(edgeptr->ts_pos);

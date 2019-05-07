@@ -46,13 +46,14 @@ class MLR_MCL {
     private:
     void coarsen_graph(Network&);
     void heavy_edge_matching(Network&,int);
-    void get_matrix_exp(Network&);
+    Csr_mtx get_matrix_exp(Network&);
     Csr_mtx get_init_sparse_mtx(Network&);
     vector<int> get_col_idcs(Network&,vector<int>,int);
     void prune();
     void regularise();
     void expand();
     void inflate(Csr_mtx&);
+    void renormalise(Csr_mtx&);
     void project_flow();
     void interpret_clust();
 
@@ -70,7 +71,10 @@ MLR_MCL::~MLR_MCL() {};
 
 void MLR_MCL::run_mcl(Network &ktn) {
     coarsen_graph(ktn);
-    get_matrix_exp(ktn);
+    Csr_mtx t_mtx_sp = get_matrix_exp(ktn);
+    cout << "test printing first elems of initial transition mtx..." << endl;
+    for (int i=0;i<10;i++) {
+        cout << t_mtx_sp.first[i].first << "  " << t_mtx_sp.first[i].second << "  " << t_mtx_sp.second[i] << endl; }
 }
 
 // heavy edge matching for graph coarsening
@@ -131,9 +135,9 @@ void MLR_MCL::coarsen_graph(Network &ktn) {
     cout << "finished graph coarsening after " << i << " iterations" << endl;
 }
 
-// call external Python script to compute the matrix exponential of the coarsened graph.
-// Return the initial, coarsened column-stochastic flow matrix
-void MLR_MCL::get_matrix_exp(Network &ktn) {
+/* call external Python script to compute the matrix exponential of the coarsened graph.
+   Return the initial, coarsened column-stochastic flow matrix in CSR sparse format */
+MLR_MCL::Csr_mtx MLR_MCL::get_matrix_exp(Network &ktn) {
 
     Edge *edgeptr;
     cout << "looping over all FROM neighbours: " << endl;
@@ -153,24 +157,25 @@ void MLR_MCL::get_matrix_exp(Network &ktn) {
     cout << "Calculating sparse transition rate matrix" << endl;
     Csr_mtx k_mtx_sp = get_init_sparse_mtx(ktn); // sparse representation of transition rate matrix
     cout << "Setting up Python interpreter" << endl;
-    int ret_val;
+    vector<pair<double,int>> Tspci; vector<int> Trl;
     const char *py_script_name = "calc_matrix_exp"; const char *py_func_name = "calc_expm";
+    bool err_flag = false;
     setenv("PYTHONPATH",".",1); // set environment variable correctly (here, calc_matrix_exp.py is in current dir)
     PyObject *pName=NULL, *pModule=NULL, *pFunc=NULL; // names of Python script, module and function, respectively
     PyObject *pArgs=NULL, *pRetval=NULL; // names of arguments for and return value of the Python function, respectively
     // PyObject objs for defining arguments to the Python function
-    PyObject *pValue=NULL, *pValue2=NULL, *pValue3=NULL, *pValue4=NULL;
+    PyObject *pValue=NULL, *pValue2=NULL, *pValue3=NULL, *pValue4=NULL, *pValue5=NULL;
+    PyObject *pList1=NULL, *pList2=NULL, *pList3=NULL; // used to process returned lists
     Py_Initialize(); // initialise the interpreter
     pName = PyString_FromString(py_script_name); // name of Python script
-    if (pName==NULL) { goto error; }
+    if (pName==NULL) { err_flag = true; goto error; }
     pModule = PyImport_Import(pName); // import corresponding module
     Py_DECREF(pName);
-    if (pModule==NULL) { goto error; }
+    if (pModule==NULL) { err_flag = true; goto error; }
     pFunc = PyObject_GetAttrString(pModule,py_func_name); // retrieve desired object from module
-    if (pFunc==NULL) { goto error; }
+    if (pFunc==NULL) { err_flag = true; goto error; }
     if (pFunc && PyCallable_Check(pFunc)) { // Python object exists and is callable
-        pArgs = PyTuple_New(4); // tuple of args. Here, pFunc takes four args; 3 arrays and 1 double
-        pRetval = PyInt_FromLong(0); // dummy
+        pArgs = PyTuple_New(5); // tuple of args. Here, pFunc takes four args; 3 arrays and 1 double
         // each arg is a Python object. Here, we want to pass 3 lists describing the sparse matrix to the Python function object
         pValue = PyList_New(k_mtx_sp.first.size());
         pValue2 = PyList_New(k_mtx_sp.first.size());
@@ -183,21 +188,38 @@ void MLR_MCL::get_matrix_exp(Network &ktn) {
             PyList_SetItem(pValue3,i,PyInt_FromLong(k_mtx_sp.second[i]));
         }
         pValue4 = PyFloat_FromDouble(tau);
+        pValue5 = PyFloat_FromDouble(eps);
         // set values of the pArgs tuple
         PyTuple_SetItem(pArgs,0,pValue); PyTuple_SetItem(pArgs,1,pValue2); PyTuple_SetItem(pArgs,2,pValue3);
-        PyTuple_SetItem(pArgs,3,pValue4);
+        PyTuple_SetItem(pArgs,3,pValue4); PyTuple_SetItem(pArgs,4,pValue5);
         pRetval = PyObject_CallObject(pFunc,pArgs); // call the Python function
-        cout << "I'm back outside of the Python script" << endl;
-        if (pValue==NULL) { goto error; } // Python function has a return value, so should not return NULL
-        ret_val = int(PyFloat_AsDouble(pRetval)); // extract the return value of the Python function
+        cout << "Returned transition matrix from Python script" << endl;
+        // Python function has a return value, so should not return NULL, and should return a tuple of lists
+        if (pRetval==NULL || !PyTuple_Check(pRetval)) { err_flag = true; goto error; }
+        pList1 = PyTuple_GetItem(pRetval,0); pList2 = PyTuple_GetItem(pRetval,1); pList3 = PyTuple_GetItem(pRetval,2);
+        if (!PyList_Check(pList1) || !PyList_Check(pList2) || !PyList_Check(pList3)) { err_flag = true; goto error; }
+        // extract the return values of the Python function
+        cout << "Transition matrix has " << PyList_Size(pList1) << " nonzero elems and dimension " << \
+                PyList_Size(pList3) << endl;
+        Tspci.resize(PyList_Size(pList1)); Trl.resize(PyList_Size(pList3));
+        for (int i=0;i<PyList_Size(pList1);i++) {
+            double Tsp_i = PyFloat_AsDouble(PyList_GetItem(pList1,i));
+            int Tci_i = int(PyInt_AsLong(PyList_GetItem(pList2,i)));
+            Tspci[i] = make_pair(Tsp_i,Tci_i); }
+        for (int i=0;i<PyList_Size(pList3);i++) {
+            Trl[i] = int(PyInt_AsLong(PyList_GetItem(pList3,i))); }
         Py_DECREF(pValue); Py_DECREF(pValue2); Py_DECREF(pValue3); Py_DECREF(pValue4);
         Py_DECREF(pFunc); Py_DECREF(pModule); Py_DECREF(pArgs); Py_DECREF(pRetval);
+        Py_DECREF(pList1); Py_DECREF(pList2); Py_DECREF(pList3);
     } else { cout << "Error: could not find Python function object" << endl; exit(EXIT_FAILURE); }
     error: // check if error has occurred in use of Python interpreter
         if (PyErr_Occurred()) {
-            cout << "Fatal error in Python interpreter" << endl; exit(EXIT_FAILURE); }
+            cout << "Fatal error in Python interpreter" << endl; exit(EXIT_FAILURE);
+        } else if (err_flag) {
+            cout << "Fatal: manual error checking has raised a flag" << endl; exit(EXIT_FAILURE); }
     Py_Finalize(); // finished with Python interpreter
-    cout << "Return value from py function was: " << ret_val << endl;
+    Csr_mtx t_mtx_sp = make_pair(Tspci,Trl);
+    return t_mtx_sp;
 }
 
 // construct an initial sparse matrix representation of the coarsened network
@@ -284,6 +306,11 @@ void MLR_MCL::expand() {
 
 // inflation operation for the transition matrix
 void MLR_MCL::inflate(Csr_mtx &T_csr) {
+
+}
+
+// renormalise columns of sparse matrix
+void MLR_MCL::renormalise(Csr_mtx &T_csr) {
 
 }
 
