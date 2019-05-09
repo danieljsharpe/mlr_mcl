@@ -23,6 +23,7 @@ April 2019
 #include <numeric>
 #include <limits>
 #include <map>
+#include <iterator>
 #include <stdlib.h>
 #include <boost/python.hpp>
 #include <Python.h>
@@ -32,7 +33,7 @@ using namespace std;
 // class for multi-level regularised Markov clustering (MLR-MCL)
 class MLR_MCL {
 
-    typedef vector<vector<pair<int,int>>> nodemap_vec;
+    typedef vector<map<int,int>> nodemap_vec;
     typedef pair<vector<pair<double,int>>,vector<int>> Csr_mtx; // matrix in CSR sparse format
 
     public:
@@ -54,11 +55,13 @@ class MLR_MCL {
     void expand();
     void inflate(Csr_mtx&);
     void renormalise(Csr_mtx&);
-    void project_flow();
+    void project_flow(Network&,Csr_mtx&,map<int,int>);
     void interpret_clust();
 
     vector<int> g_C_size; // size of coarsened graph at each step
-    nodemap_vec nodemap; // mapping of nodes to higher levels in multi-level coarsening procedure
+    nodemap_vec nodemap; // mapping of nodes to higher levels in multi-level coarsening procedure (pairwise merging)
+    map<int,int> idxmap; // mapping of min ID's of coarsened graph to indices of corresponding transition matrix
+    vector<int> idxlist; // ordered list of min ID's (posns in list correspond to indices of transition matrix)
 };
 
 MLR_MCL::MLR_MCL(double d1,double d2,int i1,int i2,double d3, double d4, int i3, int i4) : \
@@ -75,6 +78,27 @@ void MLR_MCL::run_mcl(Network &ktn) {
     cout << "test printing first elems of initial transition mtx..." << endl;
     for (int i=0;i<10;i++) {
         cout << t_mtx_sp.first[i].first << "  " << t_mtx_sp.first[i].second << "  " << t_mtx_sp.second[i] << endl; }
+    // run curtailed MLR-MCL
+    for (int i=g_C_size.size()-1;i>=0;i--) {
+        cout << ">>>>> running curtailed MLR-MCL on coarsened graph at level " << i+1 << endl;
+        cout << "  length of nodemap: " << nodemap[i].size() << endl;
+        map<int,int>::iterator it_map;
+        int k=0;
+        for (it_map=nodemap[i].begin();it_map!=nodemap[i].end();it_map++) {
+            cout << "  node 1: " << it_map->first << " maps to node 2: " << it_map->second << endl;
+            k++; if (k>10) { break; }
+        }
+
+        for (int j=0;j<n_cur;j++) {
+            regularise();
+            inflate(t_mtx_sp);
+            prune();
+            renormalise(t_mtx_sp);
+        }
+        project_flow(ktn,t_mtx_sp,nodemap[i]);
+        break;
+    }
+    interpret_clust();
 }
 
 // heavy edge matching for graph coarsening
@@ -115,8 +139,8 @@ void MLR_MCL::heavy_edge_matching(Network &ktn, int i_C) {
             ktn.min_nodes[matchnode_id-1].hem_flag = true;
             ktn.merge_nodes(ktn.min_nodes[node_ids[i]-1].min_id-1,ktn.min_nodes[matchnode_id-1].min_id-1);
 //            cout << "    finished merging nodes" << endl;
-            // update nodemaps
-            nodemap[i_C].emplace_back(make_pair(node_ids[i],matchnode_id));
+            // update nodemap
+            nodemap[i_C][node_ids[i]] = matchnode_id;
         } else { ktn.del_node(node_ids[i]-1); }
     }
 }
@@ -138,7 +162,7 @@ void MLR_MCL::coarsen_graph(Network &ktn) {
 /* call external Python script to compute the matrix exponential of the coarsened graph.
    Return the initial, coarsened column-stochastic flow matrix in CSR sparse format */
 MLR_MCL::Csr_mtx MLR_MCL::get_matrix_exp(Network &ktn) {
-
+/*
     Edge *edgeptr;
     cout << "looping over all FROM neighbours: " << endl;
     for (int i=0;i<ktn.tot_nodes;i++) {
@@ -153,7 +177,7 @@ MLR_MCL::Csr_mtx MLR_MCL::get_matrix_exp(Network &ktn) {
         } else { cout << "  node has no FROM nbrs!" << endl; }
     }
     cout << "\n\n\n\n" << endl;
-
+*/
     cout << "Calculating sparse transition rate matrix" << endl;
     Csr_mtx k_mtx_sp = get_init_sparse_mtx(ktn); // sparse representation of transition rate matrix
     cout << "Setting up Python interpreter" << endl;
@@ -228,8 +252,7 @@ MLR_MCL::Csr_mtx MLR_MCL::get_init_sparse_mtx(Network &ktn) {
     // elements of the transition rate matrix, row-major order, and corresponding column indices
     vector<pair<double,int>> k_elems_cols;
     vector<int> k_rl; // cumulative row lengths of transition rate matrix
-    vector<double> k_elems; vector<int> k_minids; // temporary vectors for matrix elems and min_id's
-    map<int,int> k_min2col; // mapping of min_id's to column indices
+    vector<double> k_elems; vector<int> k_minids; // temporary vectors for matrix elems and column indices
     Edge *edgeptr;
     // set the elements of the (flattened) transition rate matrix
     int z=0, dconn=0;
@@ -246,32 +269,28 @@ MLR_MCL::Csr_mtx MLR_MCL::get_init_sparse_mtx(Network &ktn) {
             if (!edge_exist) { edge_exist = true; }
             k_elems.emplace_back(edgeptr->w); k_minids.emplace_back(edgeptr->from_node->min_id);
             try {
-                int dummy = k_min2col.at(edgeptr->from_node->min_id);
+                int dummy = idxmap.at(edgeptr->from_node->min_id);
             } catch (const out_of_range& oor) {
-                k_min2col[edgeptr->from_node->min_id] = -1; z++; } // initial dummy value in map
+                idxmap[edgeptr->from_node->min_id] = -1; z++; } // initial dummy value in map
             rl++;
             edgeptr = edgeptr->next_to;
         } while (edgeptr != nullptr);
         }
-        if (!edge_exist) { dconn++; } // this node is not deleted but is disconnected
+        if (!edge_exist) { ktn.min_nodes[i].deleted = true; dconn++; } // this node is not deleted but is disconnected
         else { k_rl.emplace_back(rl); }
     }
     cout << "number of unique col_idcs: " << z << endl;
     cout << "number of disconnected nodes: " << dconn << endl;
-//    for (int i=0;i<k_minids.size();i++) { cout << k_minids[i] << endl; }
     for (vector<int>::iterator it=k_rl.begin()+1;it!=k_rl.end();it++) {
         *it += *(it-1); }
-    vector<int> k_minids_sort = k_minids;
-    sort(k_minids_sort.begin(),k_minids_sort.end());
+    idxlist.reserve(idxmap.size());
+    transform(begin(idxmap),end(idxmap),back_inserter(idxlist), \
+              [](decltype(idxmap)::value_type const& pair) { return pair.first; });
     int i=0;
-    for (auto minid: k_minids_sort) {
-        if (k_min2col[minid]==-1) { k_min2col[minid] = i; i++; } }
-    map<int,int>::iterator it_map;
-//    for (it_map=k_min2col.begin();it_map!=k_min2col.end();it_map++) {
-//        cout << "  min_id: " << it_map->first << " maps to " << it_map->second << " row length: " << \
-//                k_rl[it_map->second] << endl; }
-    for (int i=0;i<k_minids.size();i++) {
-        k_elems_cols.emplace_back(make_pair(k_elems[i],k_min2col[k_minids[i]])); }
+    for (auto minid: idxlist) {
+        idxmap[minid] = i; i++; }
+    for (int i=0;i<k_elems.size();i++) {
+        k_elems_cols.emplace_back(make_pair(k_elems[i],idxmap[k_minids[i]])); }
     Csr_mtx sparse_mtx = make_pair(k_elems_cols,k_rl);
     return sparse_mtx;
 }
@@ -306,7 +325,8 @@ void MLR_MCL::expand() {
 
 // inflation operation for the transition matrix
 void MLR_MCL::inflate(Csr_mtx &T_csr) {
-
+    for (int i=0;i<T_csr.first.size();i++) {
+        T_csr.first[i].first = pow(T_csr.first[i].first,r); }
 }
 
 // renormalise columns of sparse matrix
@@ -314,9 +334,35 @@ void MLR_MCL::renormalise(Csr_mtx &T_csr) {
 
 }
 
-// use nodemaps to undo the coarsening of the graph
-void MLR_MCL::project_flow() {
+// use nodemaps to undo the coarsening of the graph (refinement)
+void MLR_MCL::project_flow(Network &ktn, Csr_mtx &T_csr, map<int,int> curr_nodemap) {
 
+    cout << "PROJECT FLOW" << endl;
+    map<int,int>::iterator it_map; vector<int>::iterator it_find;
+    for (it_map=curr_nodemap.begin();it_map!=curr_nodemap.end();it_map++) { // update the list of indices
+        if (!ktn.min_nodes[it_map->first-1].deleted) { // add second node of pair to list of indices
+            idxlist.emplace_back(it_map->second); }
+    }
+    sort(idxlist.begin(),idxlist.end());
+    int k=0;
+    for (auto minid: idxlist) { // update the map of indices
+        if (idxmap.count(minid)==0) { idxmap[minid] = k; }
+        k++;
+    }
+    cout << "projecting flow..." << endl;
+    // elements and columns of refined transition matrix in adjacency list format
+    vector<vector<pair<double,int>>> T_ec_new(idxlist.size());
+    k=0; int rn=0; // row no.
+    vector<pair<double,int>>::iterator it_vec;
+    for (it_vec=T_csr.first.begin();it_vec!=T_csr.first.end();it_vec++) {
+        T_ec_new[idxmap[idxlist[rn]]].emplace_back(make_pair(it_vec->first,2.));
+//                 idxmap[curr_nodemap[it_vec->second]]));
+        
+//        T_new[curr_nodemap[idxlist_new[rn]].first].emplace_back(curr_nodemap[idxlist_new[it_vec->second]].first);
+//        T_new[curr_nodemap[idxlist_new[rn]].first].emplace_back(curr_nodemap[idxlist_new[it_vec->second]].second);
+        if (k==T_csr.second[rn]) { rn++; }; k++;
+    }
+    // flatten the refined transition matrix
 }
 
 // after the clustering procedure has finished, interpret the flow matrix as a clustering
