@@ -7,7 +7,7 @@ Compile with:
 g++ -std=c++11 mlr_mcl.cpp ktn.cpp read_ktn.cpp utils.cpp -I /usr/include/python2.7/ -L /usr/include/python2.7/Python.h -lpython2.7 -o mlr_mcl
 
 Execute with e.g.:
-./mlr_mcl 22659 34145 1.5 0.5 10 4 1.E-06 1.E-06 19 2000
+./mlr_mcl 22659 34145 1.5 0.5 10 4 1.E-15 1.E-10 19 1000
 
 Daniel J. Sharpe
 April 2019
@@ -49,13 +49,11 @@ class MLR_MCL {
     void heavy_edge_matching(Network&,int);
     Csr_mtx get_matrix_exp(Network&);
     Csr_mtx get_init_sparse_mtx(Network&);
-    vector<int> get_col_idcs(Network&,vector<int>,int);
-    void prune();
     void regularise();
     void expand();
     void inflate(Csr_mtx&);
-    void renormalise(Csr_mtx&);
-    void project_flow(Network&,Csr_mtx&,map<int,int>);
+    void prune_renormalise(Csr_mtx&);
+    Csr_mtx project_flow(Network&,Csr_mtx&,map<int,int>);
     void interpret_clust();
 
     vector<int> g_C_size; // size of coarsened graph at each step
@@ -92,10 +90,9 @@ void MLR_MCL::run_mcl(Network &ktn) {
         for (int j=0;j<n_cur;j++) {
             regularise();
             inflate(t_mtx_sp);
-            prune();
-            renormalise(t_mtx_sp);
+            prune_renormalise(t_mtx_sp);
         }
-        project_flow(ktn,t_mtx_sp,nodemap[i]);
+        t_mtx_sp = project_flow(ktn,t_mtx_sp,nodemap[i]); // refined transition matrix
         break;
     }
     interpret_clust();
@@ -295,24 +292,6 @@ MLR_MCL::Csr_mtx MLR_MCL::get_init_sparse_mtx(Network &ktn) {
     return sparse_mtx;
 }
 
-/*
-// given the min IDs of a nodemap, get the corresponding column indices of the transition matrix
-vector<pair<,int,int>> MLR_MCL::get_col_idcs(Network& ktn, int n_it) {
-    vector<pair<int,int>> nodemap_col(ktn.nodemap_vec[n_it].size());
-    vector<pair<int,int>> nodemap_copy = ktn.nodemap_vec[n_it];
-    sort(nodemap_copy.begin(),nodemap_copy.end(),[](pair<int,int> pair1, pair<int,int> pair2) \
-         { return (pair1.first < pair2.first); }
-    
-    
-    return nodemap_col;
-}
-*/
-
-// prune small values from the transition matrix
-void MLR_MCL::prune() {
-
-}
-
 // regularisation operation for the transition matrix
 void MLR_MCL::regularise() {
 
@@ -329,15 +308,23 @@ void MLR_MCL::inflate(Csr_mtx &T_csr) {
         T_csr.first[i].first = pow(T_csr.first[i].first,r); }
 }
 
-// renormalise columns of sparse matrix
-void MLR_MCL::renormalise(Csr_mtx &T_csr) {
+// prune small values and renormalise columns of sparse transition matrix
+void MLR_MCL::prune_renormalise(Csr_mtx &T_csr) {
 
+    vector<pair<double,int>>::iterator it_vec;
+    int k=0, rn=0;
+    for (it_vec=T_csr.first.begin(),it_vec!=T_csr.first.end();it_vec++) {
+        if (it_vec->first < eps) { // delete entry
+
+        }
+        if (k==T_csr.second[rn]) { rn++; }; k++;
+    }
 }
 
 // use nodemaps to undo the coarsening of the graph (refinement)
-void MLR_MCL::project_flow(Network &ktn, Csr_mtx &T_csr, map<int,int> curr_nodemap) {
+MLR_MCL::Csr_mtx MLR_MCL::project_flow(Network &ktn, Csr_mtx &T_csr, map<int,int> curr_nodemap) {
 
-    cout << "PROJECT FLOW" << endl;
+    vector<int> idxlist_old = idxlist;
     map<int,int>::iterator it_map; vector<int>::iterator it_find;
     for (it_map=curr_nodemap.begin();it_map!=curr_nodemap.end();it_map++) { // update the list of indices
         if (!ktn.min_nodes[it_map->first-1].deleted) { // add second node of pair to list of indices
@@ -346,23 +333,28 @@ void MLR_MCL::project_flow(Network &ktn, Csr_mtx &T_csr, map<int,int> curr_nodem
     sort(idxlist.begin(),idxlist.end());
     int k=0;
     for (auto minid: idxlist) { // update the map of indices
-        if (idxmap.count(minid)==0) { idxmap[minid] = k; }
-        k++;
+        idxmap[minid] = k; k++;
     }
-    cout << "projecting flow..." << endl;
     // elements and columns of refined transition matrix in adjacency list format
     vector<vector<pair<double,int>>> T_ec_new(idxlist.size());
+    vector<int> T_rl(idxlist.size(),0);
     k=0; int rn=0; // row no.
     vector<pair<double,int>>::iterator it_vec;
+    // only two of the four corresponding elements in the refined matrix are non-zero
     for (it_vec=T_csr.first.begin();it_vec!=T_csr.first.end();it_vec++) {
-        T_ec_new[idxmap[idxlist[rn]]].emplace_back(make_pair(it_vec->first,2.));
-//                 idxmap[curr_nodemap[it_vec->second]]));
-        
-//        T_new[curr_nodemap[idxlist_new[rn]].first].emplace_back(curr_nodemap[idxlist_new[it_vec->second]].first);
-//        T_new[curr_nodemap[idxlist_new[rn]].first].emplace_back(curr_nodemap[idxlist_new[it_vec->second]].second);
+        T_ec_new[idxmap[idxlist_old[rn]]].emplace_back(make_pair(it_vec->first, \
+                 idxmap[idxlist_old[it_vec->second]]));
+        T_ec_new[idxmap[idxlist_old[rn]]].emplace_back(make_pair(it_vec->first, \
+                 curr_nodemap[idxmap[idxlist_old[it_vec->second]]]));
         if (k==T_csr.second[rn]) { rn++; }; k++;
     }
+    k=0;
+    for (auto rowvec: T_ec_new) {
+        T_rl[k] = rowvec.size(); k++; }
     // flatten the refined transition matrix
+    vector<pair<double,int>> T_ec = flatten<pair<double,int>>(T_ec_new);
+    Csr_mtx T_csr_new = make_pair(T_ec,T_rl);
+    return T_csr_new;
 }
 
 // after the clustering procedure has finished, interpret the flow matrix as a clustering
@@ -383,8 +375,10 @@ int main(int argc, char** argv) {
     double eps = stod(argv[7]); // threshold for pruning
     double tau = stod(argv[8]); // lag time for estimating transition matrix from transition rate matrix
     int seed = stoi(argv[9]); // random seed
-    int min_C; // min. no. of nodes in coarsened graph
+    int min_C; // min. no. of nodes in coarsened graph (optional)
+    int debug_flag; // run debug tests Y/N (optional)
     if (argc > 10) { min_C = stoi(argv[10]); } else { min_C = 0; }
+    if (argc > 11) { debug_flag = stoi(argv[11]); } else { debug_flag = 0; }
 
     vector<pair<int,int>> ts_conns = Read_ktn::read_ts_conns(nts);
     vector<double> ts_weights = Read_ktn::read_ts_weights(nts);
@@ -393,7 +387,7 @@ int main(int argc, char** argv) {
     Network::setup_network(ktn,nmin,nts,ts_conns,ts_weights);
     ts_conns.resize(0); ts_weights.resize(0);
 
-//    run_debug_tests(ktn);
+    if (debug_flag) { run_debug_tests(ktn); exit(0); }
 
     MLR_MCL mcl_obj (r,b,n_C,n_cur,eps,tau,seed,min_C);
     mcl_obj.run_mcl(ktn);

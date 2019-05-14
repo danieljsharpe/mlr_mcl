@@ -1,22 +1,7 @@
 #include "ktn.h"
-#include <random>
-#include <typeinfo>
 #include <iostream>
 
 using namespace std;
-
-// uniform random number generator
-template <class T>
-static T rand_unif(T xmin, T xmax, int seed) {
-    static default_random_engine generator (seed);
-    if (typeid(T) == typeid(double)) {
-        uniform_real_distribution<double> distribution1(xmin,xmax);
-        return distribution1(generator); }
-    else if (typeid(T) == typeid(int)) {
-        uniform_int_distribution<int> distribution2(xmin,xmax);
-        return distribution2(generator); }
-}
-
 
 // loop over TO or FROM edges downstream from edgeptr in linked list (used in debug tests)
 void print_edgeptr_info(Edge *edgeptr, int opt) {
