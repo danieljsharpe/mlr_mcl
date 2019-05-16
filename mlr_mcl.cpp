@@ -7,7 +7,7 @@ Compile with:
 g++ -std=c++11 mlr_mcl.cpp ktn.cpp read_ktn.cpp utils.cpp -I /usr/include/python2.7/ -L /usr/include/python2.7/Python.h -lpython2.7 -o mlr_mcl
 
 Execute with e.g.:
-./mlr_mcl 22659 34145 1.5 0.5 10 4 1.E-15 1.E-10 19 1000
+./mlr_mcl 22659 34145 1.5 0.5 10 4 100 1.E-12 1.E-10 19 1000
 
 Daniel J. Sharpe
 April 2019
@@ -30,31 +30,32 @@ April 2019
 
 using namespace std;
 
-// class for multi-level regularised Markov clustering (MLR-MCL)
+/* class for multi-level regularised Markov clustering (MLR-MCL) */
 class MLR_MCL {
 
     typedef vector<map<int,int>> nodemap_vec;
-    typedef pair<vector<pair<double,int>>,vector<int>> Csr_mtx; // matrix in CSR sparse format
+    typedef pair<vector<pair<double,int>>,vector<int>> Csr_mtx; // matrix in CSR (or CSC) sparse format
 
     public:
-    MLR_MCL(double,double,int,int,double,double,int,int);
+    MLR_MCL(double,double,int,int,int,double,double,int,int);
     ~MLR_MCL();
     void run_mcl(Network&);
 
     double r; double b; double eps; double tau;
-    int n_C; int n_cur; int seed; int min_C;
+    int n_C; int n_cur; int max_it; int seed; int min_C;
 
     private:
+    void mcl_main_ops(Csr_mtx&,const Csr_mtx&);
     void coarsen_graph(Network&);
     void heavy_edge_matching(Network&,int);
     Csr_mtx get_matrix_exp(Network&);
     Csr_mtx get_init_sparse_mtx(Network&);
-    void regularise();
-    void expand();
+    void regularise(Csr_mtx&,const Csr_mtx&);
     void inflate(Csr_mtx&);
     void prune_renormalise(Csr_mtx&);
+    Csr_mtx get_reg_mtx(const Csr_mtx&);
     Csr_mtx project_flow(Network&,Csr_mtx&,map<int,int>);
-    void interpret_clust();
+    void interpret_clust(const Csr_mtx&);
 
     vector<int> g_C_size; // size of coarsened graph at each step
     nodemap_vec nodemap; // mapping of nodes to higher levels in multi-level coarsening procedure (pairwise merging)
@@ -62,23 +63,28 @@ class MLR_MCL {
     vector<int> idxlist; // ordered list of min ID's (posns in list correspond to indices of transition matrix)
 };
 
-MLR_MCL::MLR_MCL(double d1,double d2,int i1,int i2,double d3, double d4, int i3, int i4) : \
-                r(d1),b(d2),n_C(i1),n_cur(i2),eps(d3),tau(d4),seed(i3),min_C(i4) {
+MLR_MCL::MLR_MCL(double d1,double d2,int i1,int i2,int i3,double d3,double d4,int i4,int i5) : \
+                r(d1),b(d2),n_C(i1),n_cur(i2),max_it(i3),eps(d3),tau(d4),seed(i4),min_C(i5) {
 
     nodemap.resize(n_C);
 };
 
 MLR_MCL::~MLR_MCL() {};
 
+/* main loop to drive multi-level regularised Markov clustering */
 void MLR_MCL::run_mcl(Network &ktn) {
     coarsen_graph(ktn);
-    Csr_mtx t_mtx_sp = get_matrix_exp(ktn);
-    cout << "test printing first elems of initial transition mtx..." << endl;
-    for (int i=0;i<10;i++) {
-        cout << t_mtx_sp.first[i].first << "  " << t_mtx_sp.first[i].second << "  " << t_mtx_sp.second[i] << endl; }
+    Csr_mtx t_mtx_sp = get_matrix_exp(ktn); // transition matrix (CSR format)
+    Csr_mtx tG_mtx_sp = get_reg_mtx(t_mtx_sp); // regularisation matrix (CSC format)
+
+//    cout << "test printing first elems of initial transition mtx..." << endl;
+//    for (int i=0;i<10;i++) {
+//        cout << t_mtx_sp.first[i].first << "  " << t_mtx_sp.first[i].second << "  " << t_mtx_sp.second[i] << endl; }
+
     // run curtailed MLR-MCL
-    for (int i=g_C_size.size()-1;i>=0;i--) {
+    for (int i=g_C_size.size()-1;i>=1;i--) {
         cout << ">>>>> running curtailed MLR-MCL on coarsened graph at level " << i+1 << endl;
+/*
         cout << "  length of nodemap: " << nodemap[i].size() << endl;
         map<int,int>::iterator it_map;
         int k=0;
@@ -86,19 +92,26 @@ void MLR_MCL::run_mcl(Network &ktn) {
             cout << "  node 1: " << it_map->first << " maps to node 2: " << it_map->second << endl;
             k++; if (k>10) { break; }
         }
-
-        for (int j=0;j<n_cur;j++) {
-            regularise();
-            inflate(t_mtx_sp);
-            prune_renormalise(t_mtx_sp);
-        }
+*/
+        for (int j=0;j<n_cur;j++) { mcl_main_ops(t_mtx_sp,tG_mtx_sp); }
         t_mtx_sp = project_flow(ktn,t_mtx_sp,nodemap[i]); // refined transition matrix
-        break;
+        cout << "returned projected t_mtx_sp" << endl;
+        tG_mtx_sp = get_reg_mtx(t_mtx_sp);
     }
-    interpret_clust();
+//    for (int i=0;i<max_it;i++) { mcl_main_ops(t_mtx_sp,tG_mtx_sp); }
+    interpret_clust(t_mtx_sp);
 }
 
-// heavy edge matching for graph coarsening
+/* operations of Markov clustering main loop */
+void MLR_MCL::mcl_main_ops(Csr_mtx &t_mtx_sp, const Csr_mtx &tG_mtx_sp) {
+    regularise(t_mtx_sp,tG_mtx_sp);
+    inflate(t_mtx_sp);
+    cout << "no. elems before prune " << t_mtx_sp.first.size() << endl;
+    prune_renormalise(t_mtx_sp);
+    cout << "no. elems after prune " << t_mtx_sp.first.size() << endl;
+}
+
+/* heavy edge matching for graph coarsening */
 void MLR_MCL::heavy_edge_matching(Network &ktn, int i_C) {
     Edge *edgeptr;
     vector<int> node_ids(ktn.tot_nodes);
@@ -142,7 +155,7 @@ void MLR_MCL::heavy_edge_matching(Network &ktn, int i_C) {
     }
 }
 
-// function for coarsening of the graph
+/* function for coarsening of the graph */
 void MLR_MCL::coarsen_graph(Network &ktn) {
     int i=0;
     if (ktn.n_nodes > min_C) {
@@ -243,7 +256,7 @@ MLR_MCL::Csr_mtx MLR_MCL::get_matrix_exp(Network &ktn) {
     return t_mtx_sp;
 }
 
-// construct an initial sparse matrix representation of the coarsened network
+/* construct an initial sparse matrix representation of the coarsened network */
 MLR_MCL::Csr_mtx MLR_MCL::get_init_sparse_mtx(Network &ktn) {
 
     // elements of the transition rate matrix, row-major order, and corresponding column indices
@@ -292,36 +305,45 @@ MLR_MCL::Csr_mtx MLR_MCL::get_init_sparse_mtx(Network &ktn) {
     return sparse_mtx;
 }
 
-// regularisation operation for the transition matrix
-void MLR_MCL::regularise() {
+/* construct regularisation matrix and perform regularisation operation for the transition matrix */
+void MLR_MCL::regularise(Csr_mtx &T_csr, const Csr_mtx &TG_csr) {
 
 }
 
-// expansion operation for the transition matrix
-void MLR_MCL::expand() {
-
-}
-
-// inflation operation for the transition matrix
+/* inflation operation for the transition matrix */
 void MLR_MCL::inflate(Csr_mtx &T_csr) {
     for (int i=0;i<T_csr.first.size();i++) {
         T_csr.first[i].first = pow(T_csr.first[i].first,r); }
 }
 
-// prune small values and renormalise columns of sparse transition matrix
+/* prune small values and renormalise columns of sparse transition matrix */
 void MLR_MCL::prune_renormalise(Csr_mtx &T_csr) {
 
-    vector<pair<double,int>>::iterator it_vec;
+    vector<double> cum_sum(T_csr.second.size(),0.);
     int k=0, rn=0;
-    for (it_vec=T_csr.first.begin(),it_vec!=T_csr.first.end();it_vec++) {
-        if (it_vec->first < eps) { // delete entry
-
+    vector<pair<double,int>>::iterator it_vec = T_csr.first.begin();
+    while (it_vec!=T_csr.first.end()) { // prune and accumulate column sums
+        if (it_vec->first < eps) {
+            it_vec=T_csr.first.erase(it_vec);
+            T_csr.second[rn]--;
         }
+        else {
+            cum_sum[it_vec->second] += it_vec->first; it_vec++; }
         if (k==T_csr.second[rn]) { rn++; }; k++;
     }
+    k=0; rn=0;
+    for (it_vec=T_csr.first.begin();it_vec!=T_csr.first.end();it_vec++) { // renormalise columns
+        it_vec->first *= (1./cum_sum[it_vec->second]); }
 }
 
-// use nodemaps to undo the coarsening of the graph (refinement)
+/* given a transition matrix in CSR format, return a regularisation matrix in CSC format */
+MLR_MCL::Csr_mtx MLR_MCL::get_reg_mtx(const Csr_mtx& T_csr) {
+
+    Csr_mtx TG_csr;
+    return TG_csr;
+}
+
+/* use nodemaps to undo the coarsening of the graph (refinement) */
 MLR_MCL::Csr_mtx MLR_MCL::project_flow(Network &ktn, Csr_mtx &T_csr, map<int,int> curr_nodemap) {
 
     vector<int> idxlist_old = idxlist;
@@ -357,9 +379,9 @@ MLR_MCL::Csr_mtx MLR_MCL::project_flow(Network &ktn, Csr_mtx &T_csr, map<int,int
     return T_csr_new;
 }
 
-// after the clustering procedure has finished, interpret the flow matrix as a clustering
-// characterised by attractors
-void MLR_MCL::interpret_clust() {
+/* after the clustering procedure has finished, interpret the flow matrix as a clustering
+   characterised by attractors */
+void MLR_MCL::interpret_clust(const Csr_mtx &T_csr) {
 
 }
 
@@ -372,13 +394,14 @@ int main(int argc, char** argv) {
     double b = stod(argv[4]); // balance parameter
     int n_C = stoi(argv[5]); // max no. of coarsenings
     int n_cur = stoi(argv[6]); // no. of curtailed MCL iterations for coarsened graphs
-    double eps = stod(argv[7]); // threshold for pruning
-    double tau = stod(argv[8]); // lag time for estimating transition matrix from transition rate matrix
-    int seed = stoi(argv[9]); // random seed
+    int max_it = stoi(argv[7]); // max. no. of iterations of R-MCL on the full graph
+    double eps = stod(argv[8]); // threshold for pruning
+    double tau = stod(argv[9]); // lag time for estimating transition matrix from transition rate matrix
+    int seed = stoi(argv[10]); // random seed
     int min_C; // min. no. of nodes in coarsened graph (optional)
     int debug_flag; // run debug tests Y/N (optional)
-    if (argc > 10) { min_C = stoi(argv[10]); } else { min_C = 0; }
-    if (argc > 11) { debug_flag = stoi(argv[11]); } else { debug_flag = 0; }
+    if (argc > 11) { min_C = stoi(argv[11]); } else { min_C = 0; }
+    if (argc > 12) { debug_flag = stoi(argv[12]); } else { debug_flag = 0; }
 
     vector<pair<int,int>> ts_conns = Read_ktn::read_ts_conns(nts);
     vector<double> ts_weights = Read_ktn::read_ts_weights(nts);
@@ -389,7 +412,7 @@ int main(int argc, char** argv) {
 
     if (debug_flag) { run_debug_tests(ktn); exit(0); }
 
-    MLR_MCL mcl_obj (r,b,n_C,n_cur,eps,tau,seed,min_C);
+    MLR_MCL mcl_obj (r,b,n_C,n_cur,max_it,eps,tau,seed,min_C);
     mcl_obj.run_mcl(ktn);
 
     return 0;

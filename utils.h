@@ -1,5 +1,5 @@
 #ifndef __UTILS_H_INCLUDED__
-#define __X_H_INCLUDED__
+#define __UTILS_H_INCLUDED__
 
 #include <random>
 #include <typeinfo>
