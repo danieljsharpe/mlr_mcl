@@ -35,8 +35,8 @@ def calc_expm(A,A_ci,A_rl,tau,eps):
     print "transition matrix:"
     print T
     for i in range(np.shape(A_rl)[0]):
-#        print "row:", i, "sum of row:", np.sum(np.sort(T[i,:]).copy())
         assert abs(np.sum(np.sort(T[i,:].copy()))-1.) < 1.0E-04, "Error: row %i of T does not sum to 1" % i
+    T = np.transpose(T) # transition matrix in MCL is column-stochastic
     # pass matrix back in CSR sparse format
     Tsp = []
     Tci = []
