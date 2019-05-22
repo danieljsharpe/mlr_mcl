@@ -50,9 +50,10 @@ class MLR_MCL {
     void heavy_edge_matching(Network&,int);
     Csr_mtx get_matrix_exp(Network&);
     Csr_mtx get_init_sparse_mtx(Network&);
-    void regularise(Csr_mtx&,const Csr_mtx&);
+    Csr_mtx regularise(const Csr_mtx&,const Csr_mtx&);
     void inflate(Csr_mtx&);
-    void prune_renormalise(Csr_mtx&);
+    void prune(Csr_mtx&);
+    void renormalise(Csr_mtx&);
     Csr_mtx get_reg_mtx(const Csr_mtx&);
     Csr_mtx project_flow(Network&,Csr_mtx&,const map<int,int>&);
     void interpret_clust(const Csr_mtx&);
@@ -75,7 +76,7 @@ MLR_MCL::~MLR_MCL() {};
 void MLR_MCL::run_mcl(Network &ktn) {
     coarsen_graph(ktn);
     Csr_mtx t_mtx_sp = get_matrix_exp(ktn); // transition matrix (CSR format)
-    prune_renormalise(t_mtx_sp);
+    renormalise(t_mtx_sp);
     Csr_mtx tG_mtx_sp = get_reg_mtx(t_mtx_sp); // regularisation matrix (CSC format)
 
     cout << "test printing first elems of initial transition mtx (after renormalise cols)..." << endl;
@@ -83,25 +84,16 @@ void MLR_MCL::run_mcl(Network &ktn) {
         cout << t_mtx_sp.first[i].first << "  " << t_mtx_sp.first[i].second << "  " << t_mtx_sp.second[i] << endl; }
 
     // run curtailed MLR-MCL
-    for (int i=g_C_size.size()-1;i>=1;i--) {
+    for (int i=g_C_size.size()-1;i>=0;i--) {
         cout << ">>>>> running curtailed R-MCL on coarsened graph at level " << i+1 << \
                 "  size of graph: " << t_mtx_sp.second.size() << endl;
-/*
-        cout << "  length of nodemap: " << nodemap[i].size() << endl;
-        map<int,int>::iterator it_map;
-        int k=0;
-        for (it_map=nodemap[i].begin();it_map!=nodemap[i].end();it_map++) {
-            cout << "  node 1: " << it_map->first << " maps to node 2: " << it_map->second << endl;
-            k++; if (k>10) { break; }
-        }
-*/
         for (int j=0;j<n_cur;j++) { mcl_main_ops(t_mtx_sp,tG_mtx_sp); }
         cout << "calling project_flow()..." << endl;
         t_mtx_sp = project_flow(ktn,t_mtx_sp,nodemap[i]); // refined transition matrix
         cout << "returned projected t_mtx_sp" << endl;
+        renormalise(t_mtx_sp);
         tG_mtx_sp = get_reg_mtx(t_mtx_sp);
         cout << "returned regularisation matrix" << endl;
-//        break;
     }
 //    for (int i=0;i<max_it;i++) { mcl_main_ops(t_mtx_sp,tG_mtx_sp); }
     interpret_clust(t_mtx_sp);
@@ -109,10 +101,11 @@ void MLR_MCL::run_mcl(Network &ktn) {
 
 /* operations of Markov clustering main loop */
 void MLR_MCL::mcl_main_ops(Csr_mtx &t_mtx_sp, const Csr_mtx &tG_mtx_sp) {
-    regularise(t_mtx_sp,tG_mtx_sp);
+    t_mtx_sp = regularise(t_mtx_sp,tG_mtx_sp);
     inflate(t_mtx_sp);
     cout << "no. elems before prune " << t_mtx_sp.first.size() << endl;
-    prune_renormalise(t_mtx_sp);
+    prune(t_mtx_sp);
+    renormalise(t_mtx_sp);
     cout << "no. elems after prune " << t_mtx_sp.first.size() << endl;
 }
 
@@ -144,7 +137,7 @@ void MLR_MCL::heavy_edge_matching(Network &ktn, int i_C) {
             edgeptr = edgeptr->next_from;
         } while (edgeptr!=nullptr);
         }
-        else { cout << "Fatal error: a node is disconnected" << endl; exit(EXIT_FAILURE); }
+        else { cout << "Fatal error: node " << node_ids[i] << " is disconnected" << endl; exit(EXIT_FAILURE); }
         if (matchnode_id != 0) { // found a matching, merge and update nodemap
             ktn.min_nodes[matchnode_id-1].hem_flag = true;
             ktn.merge_nodes(ktn.min_nodes[node_ids[i]-1].min_id-1,matchnode_id-1);
@@ -172,22 +165,7 @@ void MLR_MCL::coarsen_graph(Network &ktn) {
 /* call external Python script to compute the matrix exponential of the coarsened graph.
    Return the initial, coarsened column-stochastic flow matrix in CSR sparse format */
 MLR_MCL::Csr_mtx MLR_MCL::get_matrix_exp(Network &ktn) {
-/*
-    Edge *edgeptr;
-    cout << "looping over all FROM neighbours: " << endl;
-    for (int i=0;i<ktn.tot_nodes;i++) {
-        if (ktn.min_nodes[i].deleted) { continue; }
-        cout << " node " << ktn.min_nodes[i].min_id << endl;
-        edgeptr = ktn.min_nodes[i].top_from;
-        if (edgeptr!=nullptr) {
-        do {
-            cout << "  FROM " << edgeptr->from_node->min_id << " TO " << edgeptr->to_node->min_id << " w " << \
-                    edgeptr->w << "  TO node is deleted? " << edgeptr->to_node->deleted << endl;
-            edgeptr = edgeptr->next_from; } while (edgeptr!=nullptr);
-        } else { cout << "  node has no FROM nbrs!" << endl; }
-    }
-    cout << "\n\n\n\n" << endl;
-*/
+
     cout << "Calculating sparse transition rate matrix" << endl;
     Csr_mtx k_mtx_sp = get_init_sparse_mtx(ktn); // sparse representation of transition rate matrix
     cout << "Setting up Python interpreter" << endl;
@@ -308,8 +286,39 @@ MLR_MCL::Csr_mtx MLR_MCL::get_init_sparse_mtx(Network &ktn) {
 }
 
 /* perform regularisation (matrix product) operation for the transition matrix */
-void MLR_MCL::regularise(Csr_mtx &T_csr, const Csr_mtx &TG_csr) {
+MLR_MCL::Csr_mtx MLR_MCL::regularise(const Csr_mtx &T_csr, const Csr_mtx &TG_csr) {
 
+    Csr_mtx T_csr_new;
+    T_csr_new.second.resize(T_csr.second.size());
+    for (int i=0;i<T_csr.second.size();i++) { T_csr_new.second[i]=0; }
+    signed int lo=0, hi=T_csr.second[1];
+    cout << "in regularise()" << endl;
+    for (int rn=0;rn<T_csr.second.size();rn++) {
+        if (lo==hi) goto increment;
+//        cout << "  rn: " << rn << "  lo: " << lo << " hi: " << hi << endl;
+        for (int cn=0;cn<T_csr.second.size();cn++) {
+            int i_row=0, i_col=0;
+            double val=0.;
+            int lo_col=TG_csr.second[cn], hi_col=TG_csr.second[cn+1];
+            if (lo_col==hi_col) continue;
+            // multiplication of two sparse vectors with O(m+n) complexity
+            while ((i_row < hi-lo) && (i_col < hi_col-lo_col)) {
+                if (T_csr.first[lo+i_row].second < TG_csr.first[lo_col+i_col].second) { i_row++;
+                } else if (T_csr.first[lo+i_row].second > TG_csr.first[lo_col+i_col].second) { i_col++;
+                } else {
+                    val += T_csr.first[lo+i_row].first*TG_csr.first[lo_col+i_col].first;
+                    i_row++; i_col++;
+                }
+            }
+            if (val>eps) { T_csr_new.first.emplace_back(make_pair(val,cn)); T_csr_new.second[rn]++; }
+        }
+        increment:
+            lo = hi; hi = T_csr.second[rn+1];
+    }
+    for (int i=1;i<T_csr_new.second.size();i++) {
+        T_csr_new.second[i] += T_csr_new.second[i-1]; } //cout << "   size of row i: " << T_csr_new.second[i] << endl; }
+    cout << "leaving regularise()" << endl;
+    return T_csr_new;
 }
 
 /* inflation operation for the transition matrix */
@@ -319,9 +328,8 @@ void MLR_MCL::inflate(Csr_mtx &T_csr) {
 }
 
 /* prune small values and renormalise columns of sparse transition matrix */
-void MLR_MCL::prune_renormalise(Csr_mtx &T_csr) {
+void MLR_MCL::prune(Csr_mtx &T_csr) {
 
-    vector<double> cum_sum(T_csr.second.size(),0.);
     vector<int> T_rl = T_csr.second; // raw row lengths
     for (vector<int>::iterator it=T_rl.end()-1;it!=T_rl.begin();it--) {
         *it -= *(it-1); }
@@ -338,6 +346,12 @@ void MLR_MCL::prune_renormalise(Csr_mtx &T_csr) {
     }
     if (T_csr.second.back()!=T_csr.first.size()) {
         cout << "Fatal error: row length vector of sparse matrix is incorrect" << endl; exit(EXIT_FAILURE); }
+}
+
+void MLR_MCL::renormalise(Csr_mtx &T_csr) {
+
+    vector<double> cum_sum(T_csr.second.size(),0.);
+    vector<pair<double,int>>::iterator it_vec;
     for (it_vec=T_csr.first.begin();it_vec!=T_csr.first.end();it_vec++) { // accumulate column sums
         cum_sum[it_vec->second] += it_vec->first;
     }
@@ -354,7 +368,6 @@ MLR_MCL::Csr_mtx MLR_MCL::get_reg_mtx(const Csr_mtx &T_csr) {
     vector<pair<double,int>>::const_iterator it_vec;
     int k=0, rn=0;
     for (it_vec=T_csr.first.begin();it_vec!=T_csr.first.end();it_vec++) {
-//        cout << "k:  " << k << " rn: " << rn << "   first: " << it_vec->first << "     second: " << it_vec->second << endl;
         TG_er_al[it_vec->second].emplace_back(make_pair(it_vec->first,rn));
         if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; };
         k++;
@@ -415,15 +428,10 @@ MLR_MCL::Csr_mtx MLR_MCL::project_flow(Network &ktn, Csr_mtx &T_csr, const map<i
     k=0;
     cout << "sorting..." << endl;
     for (auto &rowvec: T_ec_new) {
-//        cout << "k: " << k << " size of rowvec: " << rowvec.size() << endl;
         sort(rowvec.begin(),rowvec.end(),[](pair<double,int> pair1,pair<double,int> pair2) {
             return (pair1.second < pair2.second); });
         T_rl[k] = rowvec.size(); if (k>0) T_rl[k] += T_rl[k-1];
         k++; }
-
-//    cout << "checking row lengths..." << endl;
-//    for (int i=0;i<T_rl.size();i++) { cout << "i: " << i << " T_rl[i]: " << T_rl[i] << endl; }
-
     // flatten the refined transition matrix
     cout << "flattening..." << endl;
     vector<pair<double,int>> T_ec = flatten<pair<double,int>>(T_ec_new);
