@@ -4,7 +4,7 @@ Need two files: "ts_conns.dat" (two-column format: min1, min2) and "ts_weights.d
 in the current directory
 
 Compile with:
-g++ -std=c++11 mlr_mcl.cpp ktn.cpp read_ktn.cpp utils.cpp -I /usr/include/python2.7/ -L /usr/include/python2.7/Python.h -lpython2.7 -o mlr_mcl
+g++ -std=c++11 mlr_mcl.cpp ktn.cpp read_ktn.cpp utils.cpp quality.cpp -I /usr/include/python2.7/ -L /usr/include/python2.7/Python.h -lpython2.7 -o mlr_mcl
 
 Execute with e.g.:
 ./mlr_mcl 22659 34145 1.5 0.5 15 4 100 1.E-08 1.E-10 19 500
@@ -16,6 +16,7 @@ April 2019
 #include "read_ktn.h"
 #include "ktn.h"
 #include "utils.h"
+#include "quality.h"
 #include <iostream>
 #include <array>
 #include <vector>
@@ -40,6 +41,7 @@ class MLR_MCL {
     MLR_MCL(double,double,int,int,int,double,double,int,int);
     ~MLR_MCL();
     void run_mcl(Network&);
+    static void calc_quality_metrics(const Network&,int);
 
     double r; double b; double eps; double tau;
     int n_C; int n_cur; int max_it; int seed; int min_C;
@@ -56,7 +58,7 @@ class MLR_MCL {
     void renormalise(Csr_mtx&);
     Csr_mtx get_reg_mtx(const Csr_mtx&);
     Csr_mtx project_flow(Network&,Csr_mtx&,const map<int,int>&);
-    void interpret_clust(const Csr_mtx&);
+    void interpret_clust(Network&,const Csr_mtx&);
 
     vector<int> g_C_size; // size of coarsened graph at each step
     nodemap_vec nodemap; // mapping of nodes to higher levels in multi-level coarsening procedure (pairwise merging)
@@ -78,11 +80,10 @@ void MLR_MCL::run_mcl(Network &ktn) {
     Csr_mtx t_mtx_sp = get_matrix_exp(ktn); // transition matrix (CSR format)
     renormalise(t_mtx_sp);
     Csr_mtx tG_mtx_sp = get_reg_mtx(t_mtx_sp); // regularisation matrix (CSC format)
-
-    cout << "test printing first elems of initial transition mtx (after renormalise cols)..." << endl;
-    for (int i=0;i<10;i++) {
-        cout << t_mtx_sp.first[i].first << "  " << t_mtx_sp.first[i].second << "  " << t_mtx_sp.second[i] << endl; }
-
+    cout << "Initial matrix:" << endl;
+//    print_sparse_matrix(t_mtx_sp);
+    cout << "Initial reg matrix:" << endl;
+//    print_sparse_matrix(tG_mtx_sp);
     // run curtailed MLR-MCL
     for (int i=g_C_size.size()-1;i>=0;i--) {
         cout << ">>>>> running curtailed R-MCL on coarsened graph at level " << i+1 << \
@@ -90,23 +91,45 @@ void MLR_MCL::run_mcl(Network &ktn) {
         for (int j=0;j<n_cur;j++) { mcl_main_ops(t_mtx_sp,tG_mtx_sp); }
         cout << "calling project_flow()..." << endl;
         t_mtx_sp = project_flow(ktn,t_mtx_sp,nodemap[i]); // refined transition matrix
-        cout << "returned projected t_mtx_sp" << endl;
+        cout << "returned projected t_mtx_sp. Renormalising..." << endl;
         renormalise(t_mtx_sp);
+//        print_sparse_matrix(t_mtx_sp);
         tG_mtx_sp = get_reg_mtx(t_mtx_sp);
         cout << "returned regularisation matrix" << endl;
     }
-//    for (int i=0;i<max_it;i++) { mcl_main_ops(t_mtx_sp,tG_mtx_sp); }
-    interpret_clust(t_mtx_sp);
+//    exit(0);
+    for (int i=0;i<max_it;i++) { mcl_main_ops(t_mtx_sp,tG_mtx_sp); }
+    interpret_clust(ktn,t_mtx_sp);
+    calc_quality_metrics(ktn,0);
 }
 
 /* operations of Markov clustering main loop */
 void MLR_MCL::mcl_main_ops(Csr_mtx &t_mtx_sp, const Csr_mtx &tG_mtx_sp) {
+    cout << "regularising..." << endl;
     t_mtx_sp = regularise(t_mtx_sp,tG_mtx_sp);
+//    print_sparse_matrix(t_mtx_sp);
+    cout << "inflating..." << endl;
     inflate(t_mtx_sp);
+//    print_sparse_matrix(t_mtx_sp);
     cout << "no. elems before prune " << t_mtx_sp.first.size() << endl;
     prune(t_mtx_sp);
+//    print_sparse_matrix(t_mtx_sp);
     renormalise(t_mtx_sp);
+//    print_sparse_matrix(t_mtx_sp);
     cout << "no. elems after prune " << t_mtx_sp.first.size() << endl;
+}
+
+/* calculate metrics to assess clustering quality and write output */
+void MLR_MCL::calc_quality_metrics(const Network &ktn, int output_flag) {
+    cout << ">>>>> Calculating modularity Q: " << Quality_clust::calc_modularity(ktn) << endl;
+    cout << ">>>>> Calculating Avg. normalised cut: " << Quality_clust::calc_avgncut(ktn) << endl;
+    if (!output_flag) {
+    cout << ">>>>> Writing communities and attractors to file..." << endl;
+    Quality_clust::write_comms(ktn);
+    }
+    cout << ">>>>> Writing inter-community edge bool values to file..." << endl;
+    Quality_clust::find_intercomm_edges(ktn);
+    cout << ">>>>> End of MLR-MCL" << endl;
 }
 
 /* heavy edge matching for graph coarsening */
@@ -119,6 +142,7 @@ void MLR_MCL::heavy_edge_matching(Network &ktn, int i_C) {
     for (int i=0;i<ktn.tot_nodes;i++) {
         ktn.min_nodes[i].hem_flag = false; }
     for (int i=0;i<ktn.tot_nodes;i++) {
+        cout << "chosen node: " << node_ids[i] << endl;
         // check if node has already been matched or deleted
         if ((ktn.min_nodes[node_ids[i]-1].hem_flag) || (ktn.min_nodes[node_ids[i]-1].deleted)) { continue; }
         else { ktn.min_nodes[node_ids[i]-1].hem_flag = true; }
@@ -139,6 +163,7 @@ void MLR_MCL::heavy_edge_matching(Network &ktn, int i_C) {
         }
         else { cout << "Fatal error: node " << node_ids[i] << " is disconnected" << endl; exit(EXIT_FAILURE); }
         if (matchnode_id != 0) { // found a matching, merge and update nodemap
+            cout << "    matched with node: " << matchnode_id << endl;
             ktn.min_nodes[matchnode_id-1].hem_flag = true;
             ktn.merge_nodes(ktn.min_nodes[node_ids[i]-1].min_id-1,matchnode_id-1);
             nodemap[i_C][node_ids[i]] = matchnode_id;
@@ -291,32 +316,41 @@ MLR_MCL::Csr_mtx MLR_MCL::regularise(const Csr_mtx &T_csr, const Csr_mtx &TG_csr
     Csr_mtx T_csr_new;
     T_csr_new.second.resize(T_csr.second.size());
     for (int i=0;i<T_csr.second.size();i++) { T_csr_new.second[i]=0; }
-    signed int lo=0, hi=T_csr.second[1];
+    signed int lo=0, hi=T_csr.second[0];
     cout << "in regularise()" << endl;
     for (int rn=0;rn<T_csr.second.size();rn++) {
-        if (lo==hi) goto increment;
 //        cout << "  rn: " << rn << "  lo: " << lo << " hi: " << hi << endl;
+        int lo_col=0, hi_col=TG_csr.second[0];
+        if (lo==hi) goto increment_row;
         for (int cn=0;cn<T_csr.second.size();cn++) {
             int i_row=0, i_col=0;
             double val=0.;
-            int lo_col=TG_csr.second[cn], hi_col=TG_csr.second[cn+1];
-            if (lo_col==hi_col) continue;
+            if (lo_col==hi_col) goto increment_col;
+//            cout << "elem of new mtx: row: " << rn << " col: " << cn << endl;
+//            cout << "range of elem indices in row of T: " << lo << " to " << hi << endl;
+//            cout << "range of elem indices in cols of TG: " << lo_col << " to " << hi_col << endl;
             // multiplication of two sparse vectors with O(m+n) complexity
             while ((i_row < hi-lo) && (i_col < hi_col-lo_col)) {
                 if (T_csr.first[lo+i_row].second < TG_csr.first[lo_col+i_col].second) { i_row++;
                 } else if (T_csr.first[lo+i_row].second > TG_csr.first[lo_col+i_col].second) { i_col++;
                 } else {
+//                    cout << "    T col: " << T_csr.first[lo+i_row].second << " val: " << T_csr.first[lo+i_row].first << \
+                         "    TG row: " << TG_csr.first[lo_col+i_col].second << " val: " << TG_csr.first[lo_col+i_col].first << endl;
                     val += T_csr.first[lo+i_row].first*TG_csr.first[lo_col+i_col].first;
                     i_row++; i_col++;
                 }
             }
-            if (val>eps) { T_csr_new.first.emplace_back(make_pair(val,cn)); T_csr_new.second[rn]++; }
+//            cout << "val is: " << val << endl;
+            if (val>eps) { // cout << "    adding val: " << val << " rn: " << rn << " cn: " << cn << endl;
+                           T_csr_new.first.emplace_back(make_pair(val,cn)); T_csr_new.second[rn]++; }
+            increment_col:
+                lo_col = hi_col; hi_col = TG_csr.second[cn+1];
         }
-        increment:
+        increment_row:
             lo = hi; hi = T_csr.second[rn+1];
     }
     for (int i=1;i<T_csr_new.second.size();i++) {
-        T_csr_new.second[i] += T_csr_new.second[i-1]; } //cout << "   size of row i: " << T_csr_new.second[i] << endl; }
+        T_csr_new.second[i] += T_csr_new.second[i-1]; }
     cout << "leaving regularise()" << endl;
     return T_csr_new;
 }
@@ -327,17 +361,18 @@ void MLR_MCL::inflate(Csr_mtx &T_csr) {
         T_csr.first[i].first = pow(T_csr.first[i].first,r); }
 }
 
-/* prune small values and renormalise columns of sparse transition matrix */
+/* prune small values from sparse transition matrix */
 void MLR_MCL::prune(Csr_mtx &T_csr) {
 
     vector<int> T_rl = T_csr.second; // raw row lengths
     for (vector<int>::iterator it=T_rl.end()-1;it!=T_rl.begin();it--) {
         *it -= *(it-1); }
     vector<pair<double,int>>::iterator it_vec, new_end;
-    int k=0, rn=0;
+    int k=0, rn=0; if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; };
     new_end = remove_if(T_csr.first.begin(),T_csr.first.end(),[=,&k,&rn,&T_rl](pair<double,int> ec) {
         if (ec.first<eps) T_rl[rn]--;
-        if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; };
+        k++;
+        if ((k==T_csr.second[rn]) && (k<T_csr.first.size())) while (k==T_csr.second[rn]) { rn++; };
         return (ec.first<eps); });
     T_csr.first.erase(new_end,T_csr.first.end());
     T_csr.second[0] = T_rl[0];
@@ -348,6 +383,7 @@ void MLR_MCL::prune(Csr_mtx &T_csr) {
         cout << "Fatal error: row length vector of sparse matrix is incorrect" << endl; exit(EXIT_FAILURE); }
 }
 
+/* renormalise columns of sparse transition matrix */
 void MLR_MCL::renormalise(Csr_mtx &T_csr) {
 
     vector<double> cum_sum(T_csr.second.size(),0.);
@@ -366,15 +402,15 @@ MLR_MCL::Csr_mtx MLR_MCL::get_reg_mtx(const Csr_mtx &T_csr) {
     vector<vector<pair<double,int>>> TG_er_al(T_csr.second.size()); // elems and row indices, adj list
     vector<int> TG_cl(T_csr.second.size()); // col lengths
     vector<pair<double,int>>::const_iterator it_vec;
-    int k=0, rn=0;
+    int k=0, rn=0; if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; };
     for (it_vec=T_csr.first.begin();it_vec!=T_csr.first.end();it_vec++) {
         TG_er_al[it_vec->second].emplace_back(make_pair(it_vec->first,rn));
-        if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; };
         k++;
+        if ((k==T_csr.second[rn]) && (k<T_csr.first.size())) while (k==T_csr.second[rn]) { rn++; };
     }
-    k=0;
+    k=0; TG_cl[k] = TG_er_al[k].size();
     for (const auto &colvec: TG_er_al) {
-        TG_cl[k] = colvec.size(); k++; }
+        if (k>=1) TG_cl[k] = TG_cl[k-1] + colvec.size(); k++; }
     vector<pair<double,int>> TG_er = flatten<pair<double,int>>(TG_er_al);
     Csr_mtx TG_csr = make_pair(TG_er,TG_cl);
     return TG_csr;
@@ -395,11 +431,12 @@ MLR_MCL::Csr_mtx MLR_MCL::project_flow(Network &ktn, Csr_mtx &T_csr, const map<i
     for (auto minid: idxlist) { // update the map of indices
         idxmap[minid] = k; k++;
     }
-    cout << "size of idxmap: " << idxmap.size() << " size of idlxist: " << idxlist.size() << endl;
+    cout << "size of idxmap: " << idxmap.size() << " size of idxlist: " << idxlist.size() << endl;
     // elements and columns of refined transition matrix in adjacency list format
     vector<vector<pair<double,int>>> T_ec_new(idxlist.size());
     vector<int> T_rl(idxlist.size(),0);
     k=0; int rn=0; // row no.
+    if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; }; // account for if first elem is not in first row
     vector<pair<double,int>>::iterator it_vec;
     // only two of the four corresponding elements in the refined matrix are non-zero
     cout << "projecting the flow..." << endl;
@@ -422,8 +459,8 @@ MLR_MCL::Csr_mtx MLR_MCL::project_flow(Network &ktn, Csr_mtx &T_csr, const map<i
         T_ec_new[idxmap[idxlist_old[rn]]].emplace_back(make_pair(it_vec->first, \
                  idxmap.at(curr_nodemap.at(idxlist_old[it_vec->second]))));
         }
-        if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; };
         k++;
+        if ((k==T_csr.second[rn]) && (k<T_csr.first.size())) while (k==T_csr.second[rn]) { rn++; };
     }
     k=0;
     cout << "sorting..." << endl;
@@ -442,8 +479,23 @@ MLR_MCL::Csr_mtx MLR_MCL::project_flow(Network &ktn, Csr_mtx &T_csr, const map<i
 
 /* after the clustering procedure has finished, interpret the flow matrix as a clustering
    characterised by attractors */
-void MLR_MCL::interpret_clust(const Csr_mtx &T_csr) {
+void MLR_MCL::interpret_clust(Network &ktn, const Csr_mtx &T_csr) {
 
+    cout << ">>>>> Interpreting the final stochastic matrix as a clustering..." << endl;
+    int n_comm=-1;
+    vector<pair<double,int>>::const_iterator it_vec;
+    int k=0, rn=0; if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; };
+    for (it_vec=T_csr.first.begin();it_vec!=T_csr.first.end();it_vec++) {
+        if (!ktn.min_nodes[rn].attractor) {
+            ktn.min_nodes[rn].attractor=true;
+            if (ktn.min_nodes[rn].comm_id==-1) { n_comm++;
+            } else {
+                cout << "Warning: community " << ktn.min_nodes[rn].comm_id << \
+                        " is characterised by more than one attractor" << endl; }
+        }
+        if (ktn.min_nodes[it_vec->second].comm_id==-1) ktn.min_nodes[it_vec->second].comm_id = n_comm;
+        if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; }; k++;
+    }
 }
 
 int main(int argc, char** argv) {
@@ -461,8 +513,10 @@ int main(int argc, char** argv) {
     int seed = stoi(argv[10]); // random seed
     int min_C; // min. no. of nodes in coarsened graph (optional)
     int debug_flag; // run debug tests Y/N (optional)
+    int output_flag; // read communities from file and calculate quality metrics only (optional)
     if (argc > 11) { min_C = stoi(argv[11]); } else { min_C = 0; }
     if (argc > 12) { debug_flag = stoi(argv[12]); } else { debug_flag = 0; }
+    if (argc > 13) { output_flag = stoi(argv[13]); } else { output_flag = 0; }
 
     vector<pair<int,int>> ts_conns = Read_ktn::read_ts_conns(nts);
     vector<double> ts_weights = Read_ktn::read_ts_weights(nts);
@@ -472,6 +526,7 @@ int main(int argc, char** argv) {
     ts_conns.resize(0); ts_weights.resize(0);
 
     if (debug_flag) { run_debug_tests(ktn); exit(0); }
+    if (output_flag) { MLR_MCL::calc_quality_metrics(ktn,1); exit(0); }
 
     MLR_MCL mcl_obj (r,b,n_C,n_cur,max_it,eps,tau,seed,min_C);
     mcl_obj.run_mcl(ktn);

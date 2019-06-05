@@ -1,7 +1,23 @@
+#include "utils.h"
 #include "ktn.h"
 #include <iostream>
 
 using namespace std;
+
+/* print sparse matrix, used for debugging */
+void print_sparse_matrix(const Csr_mtx &T_csr) {
+    cout << "\n>>>>>PRINTING SPARSE MATRIX<<<<<" << "\nrow lengths:";
+    vector<pair<double,int>>::const_iterator it_vec;
+    for (auto rl: T_csr.second) { cout << "  " << rl; }; cout << endl;
+    int k=0, rn=0; cout << "\nrow: " << rn << endl;
+    if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; cout << "\nrow: " << rn << endl; }
+    for (it_vec=T_csr.first.begin();it_vec!=T_csr.first.end();it_vec++) {
+        cout << "    col: " << it_vec->second << "   val: " << it_vec->first << endl;
+        k++;
+        if ((k==T_csr.second[rn]) && (k<T_csr.first.size())) while (k==T_csr.second[rn]) { rn++; cout << "\nrow: " << rn << endl; };
+    }
+    cout << endl;
+}
 
 /* loop over TO or FROM edges downstream from edgeptr in linked list (used in debug tests) */
 void print_edgeptr_info(Edge *edgeptr, int opt) {

@@ -231,7 +231,23 @@ void Network::merge_nodes(int i, int j) {
     del_node(j);
 }
 
-// set up the kinetic transition network
+/* calculate the in-degree or out_degree for node i */
+double Network::calc_deg_inout(const Network &ktn, int i, int inout) {
+    Edge *edgeptr;
+    double deg_inout=0.;
+    if (inout==1) { edgeptr = ktn.min_nodes[i].top_to; }
+    else if (inout==2) { edgeptr = ktn.min_nodes[i].top_from; }
+    if (edgeptr!=nullptr) {
+    do {
+        deg_inout = log(exp(deg_inout) + exp(edgeptr->w));
+        if (inout==1) { edgeptr = edgeptr->next_to; }
+        else if (inout==2) { edgeptr = edgeptr->next_from; }
+    } while (edgeptr!=nullptr);
+    }
+    return deg_inout;
+}
+
+/* set up the kinetic transition network */
 void Network::setup_network(Network& ktn, int nmin, int nts, vector<pair<int,int>> ts_conns, \
                    vector<double> ts_weights) {
 
@@ -290,5 +306,9 @@ void Network::setup_network(Network& ktn, int nmin, int nts, vector<pair<int,int
         }
     }
     cout << "Finished checking for duplicate edges" << endl;
+    // calculate in-degree and out-degree for nodes
+    for (int i=0;i<nmin;i++) {
+        double in_deg = Network::calc_deg_inout(ktn,i,1); ktn.min_nodes[i].deg_in = in_deg;
+        double out_deg = Network::calc_deg_inout(ktn,i,2); ktn.min_nodes[i].deg_out = out_deg;
+    }
 }
-

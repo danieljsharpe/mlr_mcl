@@ -16,7 +16,8 @@ struct Edge {
     int ts_id;
     int ts_pos; // position of the TS in the ts_edges array
     double w;
-    bool deadts = false;
+    bool deadts = false; // indicates TS only linked to one minimum
+    bool intercomm = false; // flag if edge connects nodes of two different communities
     Node *to_node;
     Node *from_node;
     Edge *next_to;
@@ -25,8 +26,11 @@ struct Edge {
 
 struct Node {
     int min_id;
+    int comm_id = -1; // community ID (-1 indicates null value)
     bool hem_flag; // flag for use in heavy edge matching routine
     bool deleted = false; // indicates node has been "deleted" from the network
+    bool attractor = false; // indicates node is an attractor (in MLR-MCL)
+    double deg_in, deg_out; // (log) in-degree and out-degree
     Edge *top_to;
     Edge *top_from;
 };
@@ -48,6 +52,7 @@ struct Network {
     void update_to_edge(int,int);
     void update_from_edge(int,int);
     void merge_nodes(int,int);
+    static double calc_deg_inout(const Network&,int,int);
     static void setup_network(Network&,int,int,vector<pair<int,int>>,vector<double>);
     vector<Node> min_nodes;
     vector<Edge> ts_edges;
