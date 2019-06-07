@@ -7,7 +7,7 @@ Compile with:
 g++ -std=c++11 mlr_mcl.cpp ktn.cpp read_ktn.cpp utils.cpp quality.cpp -I /usr/include/python2.7/ -L /usr/include/python2.7/Python.h -lpython2.7 -o mlr_mcl
 
 Execute with e.g.:
-./mlr_mcl 22659 34145 1.5 0.5 15 4 100 1.E-08 1.E-10 19 500
+./mlr_mcl 22659 34145 1.2 0.5 15 3 10 1.E-08 1.E-12 19 500
 
 Daniel J. Sharpe
 April 2019
@@ -80,10 +80,8 @@ void MLR_MCL::run_mcl(Network &ktn) {
     Csr_mtx t_mtx_sp = get_matrix_exp(ktn); // transition matrix (CSR format)
     renormalise(t_mtx_sp);
     Csr_mtx tG_mtx_sp = get_reg_mtx(t_mtx_sp); // regularisation matrix (CSC format)
-    cout << "Initial matrix:" << endl;
-//    print_sparse_matrix(t_mtx_sp);
-    cout << "Initial reg matrix:" << endl;
-//    print_sparse_matrix(tG_mtx_sp);
+//    cout << "Initial matrix:" << endl; print_sparse_matrix(t_mtx_sp);
+//    cout << "Initial reg matrix:" << endl; print_sparse_matrix(tG_mtx_sp);
     // run curtailed MLR-MCL
     for (int i=g_C_size.size()-1;i>=0;i--) {
         cout << ">>>>> running curtailed R-MCL on coarsened graph at level " << i+1 << \
@@ -98,8 +96,10 @@ void MLR_MCL::run_mcl(Network &ktn) {
         cout << "returned regularisation matrix" << endl;
     }
 //    exit(0);
-    for (int i=0;i<max_it;i++) { mcl_main_ops(t_mtx_sp,tG_mtx_sp); }
+    for (int i=0;i<max_it;i++) { cout << ">>>>> MCL iteration " << i << endl;
+        mcl_main_ops(t_mtx_sp,tG_mtx_sp); }
     interpret_clust(ktn,t_mtx_sp);
+//    cout << "final matrix..." << endl; print_sparse_matrix(t_mtx_sp);
     calc_quality_metrics(ktn,0);
 }
 
@@ -142,28 +142,28 @@ void MLR_MCL::heavy_edge_matching(Network &ktn, int i_C) {
     for (int i=0;i<ktn.tot_nodes;i++) {
         ktn.min_nodes[i].hem_flag = false; }
     for (int i=0;i<ktn.tot_nodes;i++) {
-        cout << "chosen node: " << node_ids[i] << endl;
+//        cout << "chosen node: " << node_ids[i] << endl;
         // check if node has already been matched or deleted
         if ((ktn.min_nodes[node_ids[i]-1].hem_flag) || (ktn.min_nodes[node_ids[i]-1].deleted)) { continue; }
         else { ktn.min_nodes[node_ids[i]-1].hem_flag = true; }
-        // find the neighbour FROM node i associated with edge of greatest weight
-        edgeptr = ktn.min_nodes[node_ids[i]-1].top_from;
+        // find the neighbour TO node i associated with edge of greatest weight, this node will become subsumed
+        edgeptr = ktn.min_nodes[node_ids[i]-1].top_to;
         double best_w = -numeric_limits<double>::infinity(); matchnode_id = 0;
         if (edgeptr != nullptr) {
         do {
-            if ((edgeptr->to_node->hem_flag) || \
-                (ktn.min_nodes[edgeptr->to_node->min_id-1].deleted)) {
-                edgeptr = edgeptr->next_from; continue; }
+            if ((edgeptr->from_node->hem_flag) || \
+                (ktn.min_nodes[edgeptr->from_node->min_id-1].deleted)) {
+                edgeptr = edgeptr->next_to; continue; }
             if (edgeptr->w > best_w) {
                 best_w = edgeptr->w;
-                matchnode_id = edgeptr->to_node->min_id;
+                matchnode_id = edgeptr->from_node->min_id;
             }
-            edgeptr = edgeptr->next_from;
+            edgeptr = edgeptr->next_to;
         } while (edgeptr!=nullptr);
         }
         else { cout << "Fatal error: node " << node_ids[i] << " is disconnected" << endl; exit(EXIT_FAILURE); }
         if (matchnode_id != 0) { // found a matching, merge and update nodemap
-            cout << "    matched with node: " << matchnode_id << endl;
+//            cout << "    matched with node: " << matchnode_id << endl;
             ktn.min_nodes[matchnode_id-1].hem_flag = true;
             ktn.merge_nodes(ktn.min_nodes[node_ids[i]-1].min_id-1,matchnode_id-1);
             nodemap[i_C][node_ids[i]] = matchnode_id;
@@ -486,6 +486,7 @@ void MLR_MCL::interpret_clust(Network &ktn, const Csr_mtx &T_csr) {
     vector<pair<double,int>>::const_iterator it_vec;
     int k=0, rn=0; if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; };
     for (it_vec=T_csr.first.begin();it_vec!=T_csr.first.end();it_vec++) {
+        if (it_vec->first > 0.1) { // value considered non-negligible
         if (!ktn.min_nodes[rn].attractor) {
             ktn.min_nodes[rn].attractor=true;
             if (ktn.min_nodes[rn].comm_id==-1) { n_comm++;
@@ -494,7 +495,9 @@ void MLR_MCL::interpret_clust(Network &ktn, const Csr_mtx &T_csr) {
                         " is characterised by more than one attractor" << endl; }
         }
         if (ktn.min_nodes[it_vec->second].comm_id==-1) ktn.min_nodes[it_vec->second].comm_id = n_comm;
-        if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; }; k++;
+        }
+        k++;
+        if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; };
     }
 }
 
