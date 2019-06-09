@@ -11,7 +11,7 @@ using namespace std;
 /* Head file containing general utility functions NB template funcs have to be implemented
    inside the header so that the compiler can generate code for all specialisations of the code */
 
-// uniform random number generator
+/* uniform random number generator given a range */
 template <class T>
 static T rand_unif(T xmin, T xmax, int seed) {
     static default_random_engine generator (seed);
@@ -23,7 +23,7 @@ static T rand_unif(T xmin, T xmax, int seed) {
         return distribution2(generator); }
 }
 
-// flatten a vector of vectors efficiently
+/* flatten a vector of vectors efficiently */
 template <typename T>
 vector<T> flatten(const vector<vector<T>>& vec) {
     size_t tot_sz = 0;

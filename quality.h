@@ -13,7 +13,7 @@ class Quality_clust {
 
     static double calc_modularity(const Network&);
     static double calc_avgncut(const Network&);
-    static void find_intercomm_edges(const Network&);
+    static void find_intercomm_edges(Network&);
     static void write_comms(const Network&);
 };
 

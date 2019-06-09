@@ -21,11 +21,13 @@ April 2019
 #include <array>
 #include <vector>
 #include <algorithm>
+#include <random>
 #include <numeric>
 #include <limits>
 #include <map>
 #include <iterator>
 #include <stdlib.h>
+#include <cstdlib>
 #include <boost/python.hpp>
 #include <Python.h>
 
@@ -38,13 +40,13 @@ class MLR_MCL {
     typedef pair<vector<pair<double,int>>,vector<int>> Csr_mtx; // matrix in CSR (or CSC) sparse format
 
     public:
-    MLR_MCL(double,double,int,int,int,double,double,int,int);
+    MLR_MCL(double,double,int,int,int,double,double,unsigned int,int);
     ~MLR_MCL();
     void run_mcl(Network&);
-    static void calc_quality_metrics(const Network&,int);
+    static void calc_quality_metrics(Network&,int);
 
     double r; double b; double eps; double tau;
-    int n_C; int n_cur; int max_it; int seed; int min_C;
+    int n_C; int n_cur; int max_it; unsigned int seed; int min_C;
 
     private:
     void mcl_main_ops(Csr_mtx&,const Csr_mtx&);
@@ -66,9 +68,9 @@ class MLR_MCL {
     vector<int> idxlist; // ordered list of min ID's (posns in list correspond to indices of transition matrix)
 };
 
-MLR_MCL::MLR_MCL(double d1,double d2,int i1,int i2,int i3,double d3,double d4,int i4,int i5) : \
+MLR_MCL::MLR_MCL(double d1,double d2,int i1,int i2,int i3,double d3,double d4,unsigned int i4,int i5) : \
                 r(d1),b(d2),n_C(i1),n_cur(i2),max_it(i3),eps(d3),tau(d4),seed(i4),min_C(i5) {
-
+    srand(seed);
     nodemap.resize(n_C);
 };
 
@@ -120,15 +122,15 @@ void MLR_MCL::mcl_main_ops(Csr_mtx &t_mtx_sp, const Csr_mtx &tG_mtx_sp) {
 }
 
 /* calculate metrics to assess clustering quality and write output */
-void MLR_MCL::calc_quality_metrics(const Network &ktn, int output_flag) {
-    cout << ">>>>> Calculating modularity Q: " << Quality_clust::calc_modularity(ktn) << endl;
-    cout << ">>>>> Calculating Avg. normalised cut: " << Quality_clust::calc_avgncut(ktn) << endl;
+void MLR_MCL::calc_quality_metrics(Network &ktn, int output_flag) {
+    cout << ">>>>> Writing inter-community edge bool values to file..." << endl;
+    Quality_clust::find_intercomm_edges(ktn);
     if (!output_flag) {
     cout << ">>>>> Writing communities and attractors to file..." << endl;
     Quality_clust::write_comms(ktn);
     }
-    cout << ">>>>> Writing inter-community edge bool values to file..." << endl;
-    Quality_clust::find_intercomm_edges(ktn);
+    cout << ">>>>> Calculating modularity Q: " << Quality_clust::calc_modularity(ktn) << endl;
+    cout << ">>>>> Calculating Avg. normalised cut: " << Quality_clust::calc_avgncut(ktn) << endl;
     cout << ">>>>> End of MLR-MCL" << endl;
 }
 
@@ -137,6 +139,7 @@ void MLR_MCL::heavy_edge_matching(Network &ktn, int i_C) {
     Edge *edgeptr;
     vector<int> node_ids(ktn.tot_nodes);
     iota(begin(node_ids),end(node_ids),1);
+//    shuffle(begin(node_ids),end(node_ids),default_random_engine(seed));
     random_shuffle(begin(node_ids),end(node_ids));
     int matchnode_id;
     for (int i=0;i<ktn.tot_nodes;i++) {
@@ -184,6 +187,8 @@ void MLR_MCL::coarsen_graph(Network &ktn) {
         g_C_size.emplace_back(ktn.n_nodes);
     } while ((i < n_C) && (ktn.n_nodes > min_C));
     }
+    if ((min_C > 0) && (ktn.n_nodes > min_C)) {
+        cout << "Error: no. of nodes in most coarse graph exceeds maximum allowed" << endl; exit(EXIT_FAILURE); }
     cout << "finished graph coarsening after " << i << " iterations" << endl;
 }
 
@@ -513,20 +518,22 @@ int main(int argc, char** argv) {
     int max_it = stoi(argv[7]); // max. no. of iterations of R-MCL on the full graph
     double eps = stod(argv[8]); // threshold for pruning
     double tau = stod(argv[9]); // lag time for estimating transition matrix from transition rate matrix
-    int seed = stoi(argv[10]); // random seed
+    unsigned int seed = stoi(argv[10]); // random seed
     int min_C; // min. no. of nodes in coarsened graph (optional)
     int debug_flag; // run debug tests Y/N (optional)
     int output_flag; // read communities from file and calculate quality metrics only (optional)
     if (argc > 11) { min_C = stoi(argv[11]); } else { min_C = 0; }
     if (argc > 12) { debug_flag = stoi(argv[12]); } else { debug_flag = 0; }
     if (argc > 13) { output_flag = stoi(argv[13]); } else { output_flag = 0; }
+    cout << ">>>>> Finished reading input arguments" << endl;
 
-    vector<pair<int,int>> ts_conns = Read_ktn::read_ts_conns(nts);
-    vector<double> ts_weights = Read_ktn::read_ts_weights(nts);
+    vector<pair<int,int>> ts_conns = Read_ktn::read_double_col(nts,"ts_conns.dat");
+    vector<double> ts_weights = Read_ktn::read_single_col(2*nts,"ts_weights.dat");
+    vector<double> stat_probs = Read_ktn::read_single_col(nmin,"stat_prob.dat");
 
     Network ktn(nmin,nts);
-    Network::setup_network(ktn,nmin,nts,ts_conns,ts_weights);
-    ts_conns.resize(0); ts_weights.resize(0);
+    Network::setup_network(ktn,nmin,nts,ts_conns,ts_weights,stat_probs);
+    ts_conns.resize(0); ts_weights.resize(0); stat_probs.resize(0);
 
     if (debug_flag) { run_debug_tests(ktn); exit(0); }
     if (output_flag) { MLR_MCL::calc_quality_metrics(ktn,1); exit(0); }

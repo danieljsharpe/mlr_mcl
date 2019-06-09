@@ -30,7 +30,9 @@ struct Node {
     bool hem_flag; // flag for use in heavy edge matching routine
     bool deleted = false; // indicates node has been "deleted" from the network
     bool attractor = false; // indicates node is an attractor (in MLR-MCL)
+    bool atboundary = false; // indicates node has at least one inter-community edge
     double deg_in, deg_out; // (log) in-degree and out-degree
+    double peq; // equilibrium (stationary) occupation probability
     Edge *top_to;
     Edge *top_from;
 };
@@ -53,7 +55,8 @@ struct Network {
     void update_from_edge(int,int);
     void merge_nodes(int,int);
     static double calc_deg_inout(const Network&,int,int);
-    static void setup_network(Network&,int,int,vector<pair<int,int>>,vector<double>);
+    static void setup_network(Network&,int,int,const vector<pair<int,int>>,const vector<double>, \
+        const vector<double>);
     vector<Node> min_nodes;
     vector<Edge> ts_edges;
 

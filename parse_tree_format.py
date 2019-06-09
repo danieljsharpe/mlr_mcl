@@ -70,7 +70,7 @@ class Parse_treefile(object):
                                                int(hierarchy[self.read_clust_level])
                     if self.read_clust_level != 1: leveltopclust = int(hierarchy[0])
                 except IndexError:
-                    print "Error: trying to read a cluster level that doesn't exist. " + \
+                    print "Error: trying to read a cluster level that doesn't exist for cluster ", hierarchy[0], \
                           "Try decreasing read_clust_level"
                     raise
                 # NB need to account for the fact that we could have e.g. 1:1:1 and on next line 2:1:1, hence OR
@@ -283,9 +283,9 @@ class Parse_treefile(object):
         with open("groups.dat","w") as opf:
             for id_val in node_clust_id:
                 if id_val not in self.clust_id_sortbyid:
-                    opf.write("0\n")
+                    opf.write("-1\n")
                 else:
-                    opf.write(str(new_id_vals[id_val])+"\n")
+                    opf.write(str(new_id_vals[id_val]-1)+"\n")
                 '''
                 # TEST!
                 if id_val not in [1, 2, 3, 4, 8, 9, 10, 11]:
@@ -296,7 +296,7 @@ class Parse_treefile(object):
 
     ''' Function to find subcluster IDs that give non-negligible (according to a flow_cutoff) contribution to
         the total flow. Use e.g. flow_cutoff=1.01 to return all clusters '''
-    def find_major_flow(self,flow_cutoff=0.95):
+    def find_major_flow(self,flow_cutoff=1.01):
         if self.plot_level==1: clust_flow_vals = self.level1clustflow
         elif self.plot_level==2: clust_flow_vals = self.level2clustflow
         clust_id_sortbyflow = sorted([i for i in range(1,len(clust_flow_vals)+1)],key = \

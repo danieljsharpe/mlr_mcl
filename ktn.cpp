@@ -2,6 +2,7 @@
 #include <vector>
 #include <algorithm>
 #include <math.h>
+#include <cmath>
 #include <iostream>
 
 using namespace std;
@@ -248,13 +249,19 @@ double Network::calc_deg_inout(const Network &ktn, int i, int inout) {
 }
 
 /* set up the kinetic transition network */
-void Network::setup_network(Network& ktn, int nmin, int nts, vector<pair<int,int>> ts_conns, \
-                   vector<double> ts_weights) {
+void Network::setup_network(Network& ktn, int nmin, int nts, const vector<pair<int,int>> ts_conns, \
+                   const vector<double> ts_weights, const vector<double> stat_probs) {
 
     ktn.n_nodes = nmin; ktn.tot_nodes = nmin; ktn.n_edges = 2*nts; ktn.tot_edges = 2*nts;
+    double tot_peq = 0.;
     for (int i=0;i<nmin;i++) {
         ktn.min_nodes[i].min_id = i+1;
+        ktn.min_nodes[i].peq = stat_probs[i];
+        tot_peq = log(exp(tot_peq) + exp(stat_probs[i]));
     }
+    if (abs(tot_peq-1.)>1.E-15) {
+        cout << "Error: total equilibrium probabilities of minima is: " << tot_peq << " =/= 1" << endl;
+        throw Network::Ktn_exception(); }
     for (int i=0;i<nts;i++) {
         ktn.ts_edges[2*i].ts_id = i+1;
         ktn.ts_edges[(2*i)+1].ts_id = i+1;

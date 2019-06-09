@@ -1,5 +1,5 @@
 /*
-Read in kinetic transition network information from files "ts_conns.dat" and "ts_weights.dat"
+Read in kinetic transition network information from files "ts_conns.dat", "ts_weights.dat" and "stat_prob.dat"
 */
 
 #include <vector>
@@ -11,35 +11,35 @@ Read in kinetic transition network information from files "ts_conns.dat" and "ts
 
 using namespace std;
 
-vector<pair<int,int>> Read_ktn::read_ts_conns(int nts) {
+vector<pair<int,int>> Read_ktn::read_double_col(int nlines, string inp_fname) {
 
     string line;
-    ifstream ts_conns_f;
-    ts_conns_f.open("ts_conns.dat");
-    vector<pair<int,int>> ts_conns(nts);
-    for (int i=0;i<nts;i++) {
-        getline(ts_conns_f,line);
+    ifstream inp_f;
+    inp_f.open(inp_fname);
+    vector<pair<int,int>> entries_pairs(nlines);
+    for (int i=0;i<nlines;i++) {
+        getline(inp_f,line);
         istringstream min_pair(line);
         auto itt = istream_iterator<string>(min_pair);
         int min1 = stoi(*itt);
         itt++;
         int min2 = stoi(*itt);
-        ts_conns[i] = make_pair(min1,min2);
+        entries_pairs[i] = make_pair(min1,min2);
     }
-    ts_conns_f.close();
-    return ts_conns;
+    inp_f.close();
+    return entries_pairs;
 }
 
-vector<double> Read_ktn::read_ts_weights(int nts) {
+vector<double> Read_ktn::read_single_col(int nlines, string inp_fname) {
 
-    string ts_wt_str;
-    vector<double> ts_weights(2*nts);
-    ifstream ts_wts_f;
-    ts_wts_f.open("ts_weights.dat");
-    for (int i=0;i<2*nts;i++) {
-        getline(ts_wts_f,ts_wt_str);
-        ts_weights[i] = stod(ts_wt_str);
+    string val_str;
+    vector<double> entries(nlines);
+    ifstream inp_f;
+    inp_f.open(inp_fname);
+    for (int i=0;i<nlines;i++) {
+        getline(inp_f,val_str);
+        entries[i] = stod(val_str);
     }
-    ts_wts_f.close();
-    return ts_weights;
+    inp_f.close();
+    return entries;
 }
