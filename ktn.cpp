@@ -4,6 +4,7 @@
 #include <math.h>
 #include <cmath>
 #include <iostream>
+#include <limits>
 
 using namespace std;
 
@@ -235,7 +236,7 @@ void Network::merge_nodes(int i, int j) {
 /* calculate the in-degree or out_degree for node i */
 double Network::calc_deg_inout(const Network &ktn, int i, int inout) {
     Edge *edgeptr;
-    double deg_inout=0.;
+    double deg_inout = -numeric_limits<double>::infinity();
     if (inout==1) { edgeptr = ktn.min_nodes[i].top_to; }
     else if (inout==2) { edgeptr = ktn.min_nodes[i].top_from; }
     if (edgeptr!=nullptr) {
@@ -253,15 +254,16 @@ void Network::setup_network(Network& ktn, int nmin, int nts, const vector<pair<i
                    const vector<double> ts_weights, const vector<double> stat_probs) {
 
     ktn.n_nodes = nmin; ktn.tot_nodes = nmin; ktn.n_edges = 2*nts; ktn.tot_edges = 2*nts;
-    double tot_peq = 0.;
+    double tot_peq = -numeric_limits<double>::infinity();
     for (int i=0;i<nmin;i++) {
         ktn.min_nodes[i].min_id = i+1;
         ktn.min_nodes[i].peq = stat_probs[i];
         tot_peq = log(exp(tot_peq) + exp(stat_probs[i]));
     }
-    if (abs(tot_peq-1.)>1.E-15) {
-        cout << "Error: total equilibrium probabilities of minima is: " << tot_peq << " =/= 1" << endl;
-        throw Network::Ktn_exception(); }
+    tot_peq = exp(tot_peq);
+//    if (abs(tot_peq-1.)>1.E-15) {
+//        cout << "Error: total equilibrium probabilities of minima is: " << tot_peq << " =/= 1." << endl;
+//        throw Network::Ktn_exception(); }
     for (int i=0;i<nts;i++) {
         ktn.ts_edges[2*i].ts_id = i+1;
         ktn.ts_edges[(2*i)+1].ts_id = i+1;
@@ -273,8 +275,8 @@ void Network::setup_network(Network& ktn, int nmin, int nts, const vector<pair<i
             ktn.n_dead++;
             ktn.n_edges = ktn.n_edges-2;
             continue; }
-        ktn.ts_edges[2*i].w = ts_weights[2*i];
-        ktn.ts_edges[(2*i)+1].w = ts_weights[(2*i)+1];
+        ktn.ts_edges[2*i].w = ts_weights[2*i]; ktn.ts_edges[2*i].w_r = ts_weights[2*i];
+        ktn.ts_edges[(2*i)+1].w = ts_weights[(2*i)+1]; ktn.ts_edges[(2*i)+1].w_r = ts_weights[(2*i)+1];
         ktn.ts_edges[2*i].from_node = &ktn.min_nodes[ts_conns[i].first-1];
         ktn.ts_edges[2*i].to_node = &ktn.min_nodes[ts_conns[i].second-1];
         ktn.ts_edges[(2*i)+1].from_node = &ktn.min_nodes[ts_conns[i].second-1];
@@ -318,4 +320,14 @@ void Network::setup_network(Network& ktn, int nmin, int nts, const vector<pair<i
         double in_deg = Network::calc_deg_inout(ktn,i,1); ktn.min_nodes[i].deg_in = in_deg;
         double out_deg = Network::calc_deg_inout(ktn,i,2); ktn.min_nodes[i].deg_out = out_deg;
     }
+    double tot_in_deg = -numeric_limits<double>::infinity(), tot_out_deg = -numeric_limits<double>::infinity();
+    for (int i=0;i<ktn.tot_nodes;i++) {
+        tot_in_deg = log(exp(tot_in_deg) + exp(ktn.min_nodes[i].deg_in));
+        tot_out_deg = log(exp(tot_out_deg) + exp(ktn.min_nodes[i].deg_out));
+    }
+    cout << "tot_in_deg: " << tot_in_deg << " tot_out_deg: " << tot_out_deg << endl;
+    if (abs(tot_in_deg-tot_out_deg)>1.E-10) {
+        cout << "Error: total in-degrees and out-degrees of nodes do not match" << endl;
+        throw Network::Ktn_exception(); }
+    ktn.tot_in_deg = tot_in_deg;
 }

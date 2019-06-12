@@ -16,6 +16,7 @@ struct Edge {
     int ts_id;
     int ts_pos; // position of the TS in the ts_edges array
     double w;
+    double w_r; // original weight
     bool deadts = false; // indicates TS only linked to one minimum
     bool intercomm = false; // flag if edge connects nodes of two different communities
     Node *to_node;
@@ -65,6 +66,8 @@ struct Network {
     };
 
     int n_nodes; int n_edges; int tot_nodes; int tot_edges; int n_dead=0;
+    double tot_in_deg; // (log) total in-degree of nodes (N.B. = (log) total out-degree)
+    int n_comms; // number of communities
 };
 
 #endif

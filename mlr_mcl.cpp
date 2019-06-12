@@ -4,7 +4,7 @@ Need two files: "ts_conns.dat" (two-column format: min1, min2) and "ts_weights.d
 in the current directory
 
 Compile with:
-g++ -std=c++11 mlr_mcl.cpp ktn.cpp read_ktn.cpp utils.cpp quality.cpp -I /usr/include/python2.7/ -L /usr/include/python2.7/Python.h -lpython2.7 -o mlr_mcl
+g++ -std=c++11 mlr_mcl.cpp ktn.cpp utils.cpp quality.cpp -I /usr/include/python2.7/ -L /usr/include/python2.7/Python.h -lpython2.7 -o mlr_mcl
 
 Execute with e.g.:
 ./mlr_mcl 22659 34145 1.2 0.5 15 3 10 1.E-08 1.E-12 19 500
@@ -40,13 +40,13 @@ class MLR_MCL {
     typedef pair<vector<pair<double,int>>,vector<int>> Csr_mtx; // matrix in CSR (or CSC) sparse format
 
     public:
-    MLR_MCL(double,double,int,int,int,double,double,unsigned int,int);
+    MLR_MCL(double,double,int,int,int,double,double,unsigned int,int,int);
     ~MLR_MCL();
     void run_mcl(Network&);
     static void calc_quality_metrics(Network&,int);
 
     double r; double b; double eps; double tau;
-    int n_C; int n_cur; int max_it; unsigned int seed; int min_C;
+    int n_C; int n_cur; int max_it; unsigned int seed; int min_C; int min_comm_sz;
 
     private:
     void mcl_main_ops(Csr_mtx&,const Csr_mtx&);
@@ -68,8 +68,10 @@ class MLR_MCL {
     vector<int> idxlist; // ordered list of min ID's (posns in list correspond to indices of transition matrix)
 };
 
-MLR_MCL::MLR_MCL(double d1,double d2,int i1,int i2,int i3,double d3,double d4,unsigned int i4,int i5) : \
-                r(d1),b(d2),n_C(i1),n_cur(i2),max_it(i3),eps(d3),tau(d4),seed(i4),min_C(i5) {
+MLR_MCL::MLR_MCL(double d1,double d2,int i1,int i2,int i3,double d3,double d4, \
+                 unsigned int i4,int i5,int i6) : \
+                r(d1),b(d2),n_C(i1),n_cur(i2),max_it(i3),eps(d3),tau(d4),seed(i4), \
+                min_C(i5), min_comm_sz(i6) {
     srand(seed);
     nodemap.resize(n_C);
 };
@@ -100,9 +102,12 @@ void MLR_MCL::run_mcl(Network &ktn) {
 //    exit(0);
     for (int i=0;i<max_it;i++) { cout << ">>>>> MCL iteration " << i << endl;
         mcl_main_ops(t_mtx_sp,tG_mtx_sp); }
+    cout << ">>>>> End of MLR-MCL" << endl;
     interpret_clust(ktn,t_mtx_sp);
 //    cout << "final matrix..." << endl; print_sparse_matrix(t_mtx_sp);
-    calc_quality_metrics(ktn,0);
+    if (min_comm_sz>0) Quality_clust::post_processing(ktn,min_comm_sz);
+    cout << ">>>>> Writing communities and attractors to file..." << endl;
+    Quality_clust::write_comms(ktn);
 }
 
 /* operations of Markov clustering main loop */
@@ -121,17 +126,17 @@ void MLR_MCL::mcl_main_ops(Csr_mtx &t_mtx_sp, const Csr_mtx &tG_mtx_sp) {
     cout << "no. elems after prune " << t_mtx_sp.first.size() << endl;
 }
 
-/* calculate metrics to assess clustering quality and write output */
-void MLR_MCL::calc_quality_metrics(Network &ktn, int output_flag) {
+/* calculate metrics to assess clustering quality. NB because HEM modifies the Network data
+   structure, calling this function has to be done in a separate execution with the
+   output_flag arg set to 1 */
+void MLR_MCL::calc_quality_metrics(Network &ktn, int min_sz) {
+    if (min_sz>0) Quality_clust::post_processing(ktn,min_sz);
+    Quality_clust::find_intercomm_edges(ktn);
     cout << ">>>>> Writing inter-community edge bool values to file..." << endl;
     Quality_clust::find_intercomm_edges(ktn);
-    if (!output_flag) {
-    cout << ">>>>> Writing communities and attractors to file..." << endl;
-    Quality_clust::write_comms(ktn);
-    }
     cout << ">>>>> Calculating modularity Q: " << Quality_clust::calc_modularity(ktn) << endl;
-    cout << ">>>>> Calculating Avg. normalised cut: " << Quality_clust::calc_avgncut(ktn) << endl;
-    cout << ">>>>> End of MLR-MCL" << endl;
+    cout << ">>>>> Calculating avg. normalised cut: " << Quality_clust::calc_avgncut(ktn) << endl;
+    cout << ">>>>> Calculating conductance: " << Quality_clust::calc_conductance(ktn) << endl;
 }
 
 /* heavy edge matching for graph coarsening */
@@ -487,7 +492,7 @@ MLR_MCL::Csr_mtx MLR_MCL::project_flow(Network &ktn, Csr_mtx &T_csr, const map<i
 void MLR_MCL::interpret_clust(Network &ktn, const Csr_mtx &T_csr) {
 
     cout << ">>>>> Interpreting the final stochastic matrix as a clustering..." << endl;
-    int n_comm=-1;
+    int n_comm=-1; // counter for community IDs
     vector<pair<double,int>>::const_iterator it_vec;
     int k=0, rn=0; if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; };
     for (it_vec=T_csr.first.begin();it_vec!=T_csr.first.end();it_vec++) {
@@ -504,6 +509,7 @@ void MLR_MCL::interpret_clust(Network &ktn, const Csr_mtx &T_csr) {
         k++;
         if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; };
     }
+    ktn.n_comms = n_comm+1;
 }
 
 int main(int argc, char** argv) {
@@ -520,26 +526,32 @@ int main(int argc, char** argv) {
     double tau = stod(argv[9]); // lag time for estimating transition matrix from transition rate matrix
     unsigned int seed = stoi(argv[10]); // random seed
     int min_C; // min. no. of nodes in coarsened graph (optional)
+    int min_comm_sz; // min. no. of (do post-processing if >0) (optional)
     int debug_flag; // run debug tests Y/N (optional)
     int output_flag; // read communities from file and calculate quality metrics only (optional)
     if (argc > 11) { min_C = stoi(argv[11]); } else { min_C = 0; }
-    if (argc > 12) { debug_flag = stoi(argv[12]); } else { debug_flag = 0; }
-    if (argc > 13) { output_flag = stoi(argv[13]); } else { output_flag = 0; }
+    if (argc > 12) { min_comm_sz = stoi(argv[12]); } else { min_comm_sz = 0; }
+    if (argc > 13) { debug_flag = stoi(argv[13]); } else { debug_flag = 0; }
+    if (argc > 14) { output_flag = stoi(argv[14]); } else { output_flag = 0; }
     cout << ">>>>> Finished reading input arguments" << endl;
 
-    vector<pair<int,int>> ts_conns = Read_ktn::read_double_col(nts,"ts_conns.dat");
-    vector<double> ts_weights = Read_ktn::read_single_col(2*nts,"ts_weights.dat");
-    vector<double> stat_probs = Read_ktn::read_single_col(nmin,"stat_prob.dat");
+    vector<pair<int,int>> ts_conns = Read_ktn::read_double_col<int>(nts,"ts_conns.dat");
+    vector<double> ts_weights = Read_ktn::read_single_col<double>(2*nts,"ts_weights.dat");
+    vector<double> stat_probs = Read_ktn::read_single_col<double>(nmin,"stat_prob.dat");
 
     Network ktn(nmin,nts);
     Network::setup_network(ktn,nmin,nts,ts_conns,ts_weights,stat_probs);
     ts_conns.resize(0); ts_weights.resize(0); stat_probs.resize(0);
 
     if (debug_flag) { run_debug_tests(ktn); exit(0); }
-    if (output_flag) { MLR_MCL::calc_quality_metrics(ktn,1); exit(0); }
+    if (output_flag) {
+        Quality_clust::read_comms(ktn);
+        MLR_MCL::calc_quality_metrics(ktn,min_comm_sz); exit(0); }
 
-    MLR_MCL mcl_obj (r,b,n_C,n_cur,max_it,eps,tau,seed,min_C);
+    MLR_MCL mcl_obj (r,b,n_C,n_cur,max_it,eps,tau,seed,min_C,min_comm_sz);
     mcl_obj.run_mcl(ktn);
+
+    cout << ">>>>> Finished" << endl;
 
     return 0;
 }
