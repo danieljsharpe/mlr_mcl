@@ -134,9 +134,13 @@ void MLR_MCL::calc_quality_metrics(Network &ktn, int min_sz) {
     Quality_clust::find_intercomm_edges(ktn);
     cout << ">>>>> Writing inter-community edge bool values to file..." << endl;
     Quality_clust::find_intercomm_edges(ktn);
-    cout << ">>>>> Calculating modularity Q: " << Quality_clust::calc_modularity(ktn) << endl;
-    cout << ">>>>> Calculating avg. normalised cut: " << Quality_clust::calc_avgncut(ktn) << endl;
-    cout << ">>>>> Calculating conductance: " << Quality_clust::calc_conductance(ktn) << endl;
+    cout << ">>>>> Modularity Q: " << Quality_clust::calc_modularity(ktn) << endl;
+    double Ncut = Quality_clust::calc_avgncut(ktn);
+    cout << ">>>>> Normalised cut: " << Ncut*double(ktn.n_comms) << endl;
+    cout << ">>>>> Avg. Normalised cut: " << Ncut << endl;
+    double conduc = Quality_clust::calc_conductance(ktn);
+    cout << ">>>>> Conductance: " << conduc*double(ktn.n_comms) << endl;
+    cout << ">>>>> Avg. conductance: " << conduc << endl;
 }
 
 /* heavy edge matching for graph coarsening */

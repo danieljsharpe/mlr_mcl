@@ -58,23 +58,54 @@ double Quality_clust::calc_avgncut(const Network &ktn) {
             Ncut_c[ktn.ts_edges[i].from_node->comm_id] += \
                 (exp(ktn.ts_edges[i].from_node->peq - ktn.ts_edges[i].from_node->deg_out + \
                      ktn.ts_edges[i].w_r)/exp(stat_prob_comms[ktn.ts_edges[i].from_node->comm_id]));
-            Ncut_c[ktn.ts_edges[i].to_node->comm_id] += \
-                (exp(ktn.ts_edges[i].from_node->peq - ktn.ts_edges[i].from_node->deg_out + \
-                     ktn.ts_edges[i].w_r)/(1.-exp(stat_prob_comms[ktn.ts_edges[i].to_node->comm_id])));
         }
     }
     for (int i=0;i<ktn.n_comms;i++) {
         Ncut += Ncut_c[i];
-        cout << "comm i: " << i << "    avg n_cut: " << Ncut_c[i] << endl;
     }
     Ncut *= (1./double(ktn.n_comms));
+    ofstream avgncut_f;
+    avgncut_f.open("avgncut.dat",ofstream::app);
+    avgncut_f << Ncut << endl;
+    avgncut_f.close();
     return Ncut;
 }
 
 /* Calculate the conductance objective function. Append value to file "conductance.dat" */
 double Quality_clust::calc_conductance(const Network &ktn) {
 
-    double conduc = -numeric_limits<double>::infinity();
+    vector<double> deg_out_comms(ktn.n_comms,-numeric_limits<double>::infinity());
+    vector<double> conduc_c(ktn.n_comms,-numeric_limits<double>::infinity()); // conductance values for each community
+    for (int i=0;i<ktn.tot_nodes;i++) {
+        deg_out_comms[ktn.min_nodes[i].comm_id] = \
+            log(exp(deg_out_comms[ktn.min_nodes[i].comm_id]) + exp(ktn.min_nodes[i].deg_out));
+    }
+    for (int i=0;i<ktn.tot_edges;i++) {
+        if (ktn.ts_edges[i].to_node->comm_id != ktn.ts_edges[i].from_node->comm_id) {
+            conduc_c[ktn.ts_edges[i].from_node->comm_id] = \
+                log(exp(conduc_c[ktn.ts_edges[i].from_node->comm_id]) + exp(ktn.ts_edges[i].w_r));
+        }
+    }
+    // lambda function to find the minimum volume - either of the community or its complement
+    auto get_conduc_denom = [](double deg_out_comm, double deg_out_tot) {
+        // (log) out-degree of set that is complement of the community
+        double deg_out_comp = log(exp(deg_out_tot)-exp(deg_out_comm));
+        if (deg_out_comm<deg_out_comp) { return exp(deg_out_comm); }
+        else { return exp(deg_out_comp); }
+    };
+    int c_i=0; double conduc=0.;
+    using funcptr = double(*)(double,double);
+    funcptr fptr = get_conduc_denom;
+    for (auto &phi_c: conduc_c) {
+        phi_c = exp(phi_c) / get_conduc_denom(deg_out_comms[c_i],ktn.tot_in_deg);
+        conduc += phi_c;
+        c_i++;
+    }
+    conduc *= (1./double(ktn.n_comms));
+    ofstream conduc_f;
+    conduc_f.open("conductance.dat",ofstream::app);
+    conduc_f << conduc << endl;
+    conduc_f.close();
     return conduc;
 }
 
