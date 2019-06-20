@@ -261,7 +261,7 @@ void Network::setup_network(Network& ktn, int nmin, int nts, const vector<pair<i
         tot_peq = log(exp(tot_peq) + exp(stat_probs[i]));
     }
     tot_peq = exp(tot_peq);
-//    if (abs(tot_peq-1.)>1.E-15) {
+//    if (abs(tot_peq-1.)>1.E-10) {
 //        cout << "Error: total equilibrium probabilities of minima is: " << tot_peq << " =/= 1." << endl;
 //        throw Network::Ktn_exception(); }
     for (int i=0;i<nts;i++) {
