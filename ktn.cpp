@@ -287,7 +287,7 @@ void Network::setup_network(Network& ktn, int nmin, int nts, const vector<pair<i
         ktn.add_to_edge(ts_conns[i].first-1,(2*i)+1);
         ktn.add_from_edge(ts_conns[i].second-1,(2*i)+1);
     }
-    cout << "Finished reading in kinetic transition network" << endl;
+    cout << ">>>>> Finished reading in kinetic transition network" << endl;
     // account for if there are 2 edges connecting the same pair of nodes
     Edge *edgeptr;
     for (int i=0;i<nmin;i++) {
@@ -314,7 +314,7 @@ void Network::setup_network(Network& ktn, int nmin, int nts, const vector<pair<i
             } while (edgeptr!=nullptr);
         }
     }
-    cout << "Finished checking for duplicate edges" << endl;
+    cout << ">>>>> Finished checking for duplicate edges" << endl;
     // calculate in-degree and out-degree for nodes
     for (int i=0;i<nmin;i++) {
         double in_deg = Network::calc_deg_inout(ktn,i,1); ktn.min_nodes[i].deg_in = in_deg;
@@ -325,7 +325,7 @@ void Network::setup_network(Network& ktn, int nmin, int nts, const vector<pair<i
         tot_in_deg = log(exp(tot_in_deg) + exp(ktn.min_nodes[i].deg_in));
         tot_out_deg = log(exp(tot_out_deg) + exp(ktn.min_nodes[i].deg_out));
     }
-    cout << "tot_in_deg: " << tot_in_deg << " tot_out_deg: " << tot_out_deg << endl;
+    cout << "    tot_in_deg: " << tot_in_deg << endl;
     if (abs(tot_in_deg-tot_out_deg)>1.E-10) {
         cout << "Error: total in-degrees and out-degrees of nodes do not match" << endl;
         throw Network::Ktn_exception(); }

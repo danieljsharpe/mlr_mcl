@@ -1,10 +1,10 @@
 /*
 C++ code for multi-level regularised Markov clustering (MLR-MCL) of a kinetic transition network
-Need two files: "ts_conns.dat" (two-column format: min1, min2) and "ts_weights.dat" (one-column format)
+Need three files: "ts_conns.dat" (two-column format: min1, min2) and "ts_weights.dat", "stat_prob.dat" (one-column format)
 in the current directory
 
 Compile with:
-g++ -std=c++11 mlr_mcl.cpp ktn.cpp utils.cpp quality.cpp -I /usr/include/python2.7/ -L /usr/include/python2.7/Python.h -lpython2.7 -o mlr_mcl
+g++ -std=c++11 mlr_mcl.cpp ktn.cpp utils.cpp quality.cpp -I /usr/include/python2.7/ -L /usr/include/python2.7/Python.h -lpython2.7 -o mlr_mcl -fopenmp
 
 Execute with e.g.:
 ./mlr_mcl 22659 34145 1.2 0.5 15 3 10 1.E-08 1.E-12 19 500
@@ -28,6 +28,7 @@ April 2019
 #include <iterator>
 #include <stdlib.h>
 #include <cstdlib>
+#include <omp.h>
 #include <boost/python.hpp>
 #include <Python.h>
 
@@ -39,6 +40,12 @@ class MLR_MCL {
     typedef vector<map<int,int>> nodemap_vec;
     typedef pair<vector<pair<double,int>>,vector<int>> Csr_mtx; // matrix in CSR (or CSC) sparse format
 
+    /* alternative representation of matrix in CSR (or CSC) sparse format where elem and col (or row) idx
+       vectors are not paired */
+    struct Csr_mtx_struct {
+        vector<double> T_e; vector<int> T_c; vector<int> T_rl;
+    };
+
     public:
     MLR_MCL(double,double,int,int,int,double,double,unsigned int,int,int);
     ~MLR_MCL();
@@ -49,16 +56,16 @@ class MLR_MCL {
     int n_C; int n_cur; int max_it; unsigned int seed; int min_C; int min_comm_sz;
 
     private:
-    void mcl_main_ops(Csr_mtx&,const Csr_mtx&);
+    void mcl_main_ops(Csr_mtx&,const Csr_mtx_struct&);
     void coarsen_graph(Network&);
     void heavy_edge_matching(Network&,int);
     Csr_mtx get_matrix_exp(Network&);
     Csr_mtx get_init_sparse_mtx(Network&);
-    Csr_mtx regularise(const Csr_mtx&,const Csr_mtx&);
+    Csr_mtx regularise(const Csr_mtx&,const Csr_mtx_struct&);
     void inflate(Csr_mtx&);
     void prune(Csr_mtx&);
     void renormalise(Csr_mtx&);
-    Csr_mtx get_reg_mtx(const Csr_mtx&);
+    Csr_mtx_struct get_reg_mtx(const Csr_mtx&);
     Csr_mtx project_flow(Network&,Csr_mtx&,const map<int,int>&);
     void interpret_clust(Network&,const Csr_mtx&);
 
@@ -75,6 +82,8 @@ MLR_MCL::MLR_MCL(double d1,double d2,int i1,int i2,int i3,double d3,double d4, \
                 min_C(i5), min_comm_sz(i6) {
     srand(seed);
     nodemap.resize(n_C);
+    // setup for OpenMP parallelisation
+    omp_set_num_threads(omp_get_max_threads());
 };
 
 MLR_MCL::~MLR_MCL() {};
@@ -84,25 +93,27 @@ void MLR_MCL::run_mcl(Network &ktn) {
     coarsen_graph(ktn);
     Csr_mtx t_mtx_sp = get_matrix_exp(ktn); // transition matrix (CSR format)
     renormalise(t_mtx_sp);
-    Csr_mtx tG_mtx_sp = get_reg_mtx(t_mtx_sp); // regularisation matrix (CSC format)
+    cout << "\n\n\n\n>>>>> Begin multi-level regularised Markov clustering (MLR-MCL)" << endl;
+    cout << "\n  getting initial regularisation matrix..." << endl;
+    Csr_mtx_struct tG_mtx_sp = get_reg_mtx(t_mtx_sp); // regularisation matrix (CSC format)
 //    cout << "Initial matrix:" << endl; print_sparse_matrix(t_mtx_sp);
 //    cout << "Initial reg matrix:" << endl; print_sparse_matrix(tG_mtx_sp);
     // run curtailed MLR-MCL
     for (int i=g_C_size.size()-1;i>=0;i--) {
-        cout << ">>>>> running curtailed R-MCL on coarsened graph at level " << i+1 << \
+        cout << "\n>>>>> running curtailed R-MCL on coarsened graph at level " << i+1 << \
                 "  size of graph: " << t_mtx_sp.second.size() << endl;
         for (int j=0;j<n_cur;j++) { mcl_main_ops(t_mtx_sp,tG_mtx_sp); }
-        cout << "calling project_flow()..." << endl;
+        cout << "\n  projecting flow..." << endl;
         t_mtx_sp = project_flow(ktn,t_mtx_sp,nodemap[i]); // refined transition matrix
-        cout << "returned projected t_mtx_sp. Renormalising..." << endl;
+        cout << "  renormalising..." << endl;
         renormalise(t_mtx_sp);
 //        print_sparse_matrix(t_mtx_sp);
+        cout << "  getting regularisation matrix..." << endl;
         tG_mtx_sp = get_reg_mtx(t_mtx_sp);
-        cout << "returned regularisation matrix" << endl;
     }
-    for (int i=0;i<max_it;i++) { cout << ">>>>> MCL iteration " << i << endl;
+    for (int i=1;i<max_it+1;i++) { cout << "\n>>>>> MCL iteration " << i << endl;
         mcl_main_ops(t_mtx_sp,tG_mtx_sp); }
-    cout << ">>>>> End of MLR-MCL" << endl;
+    cout << "\n>>>>> End of MLR-MCL" << endl;
     interpret_clust(ktn,t_mtx_sp);
 //    cout << "final matrix..." << endl; print_sparse_matrix(t_mtx_sp);
     if (min_comm_sz>0) Quality_clust::post_processing(ktn,min_comm_sz);
@@ -111,17 +122,14 @@ void MLR_MCL::run_mcl(Network &ktn) {
 }
 
 /* operations of Markov clustering main loop */
-void MLR_MCL::mcl_main_ops(Csr_mtx &t_mtx_sp, const Csr_mtx &tG_mtx_sp) {
+void MLR_MCL::mcl_main_ops(Csr_mtx &t_mtx_sp, const Csr_mtx_struct &tG_mtx_sp) {
+    cout << "\n  Regularising..." << endl;
     t_mtx_sp = regularise(t_mtx_sp,tG_mtx_sp);
-//    print_sparse_matrix(t_mtx_sp);
     inflate(t_mtx_sp);
-//    print_sparse_matrix(t_mtx_sp);
-    cout << "no. elems before prune " << t_mtx_sp.first.size() << " occ rows before prune " << n_row_occ << endl;
+    cout << "  no. elems before prune " << t_mtx_sp.first.size() << " occ rows before prune " << n_row_occ << endl;
     prune(t_mtx_sp);
-//    print_sparse_matrix(t_mtx_sp);
     renormalise(t_mtx_sp);
-//    print_sparse_matrix(t_mtx_sp);
-    cout << "no. elems after prune " << t_mtx_sp.first.size() << " occ rows after prune " << n_row_occ << endl;
+    cout << "  no. elems after prune " << t_mtx_sp.first.size() << " occ rows after prune " << n_row_occ << endl;
 }
 
 /* calculate metrics to assess clustering quality. NB because HEM modifies the Network data
@@ -183,27 +191,27 @@ void MLR_MCL::heavy_edge_matching(Network &ktn, int i_C) {
 void MLR_MCL::coarsen_graph(Network &ktn) {
     int i=0;
     if (ktn.n_nodes > min_C) {
-    cout << "Coarsening the network..." << endl;
+    cout << "\n>>>>> Coarsening the network..." << endl;
     do {
         heavy_edge_matching(ktn,i);
         i++;
-        cout << ">>>> level " << i << ": n_nodes is now: " << ktn.n_nodes << endl;
+        cout << "     level " << i << ": n_nodes is now: " << ktn.n_nodes << endl;
         g_C_size.emplace_back(ktn.n_nodes);
     } while ((i < n_C) && (ktn.n_nodes > min_C));
     }
     if ((min_C > 0) && (ktn.n_nodes > min_C)) {
         cout << "Error: no. of nodes in most coarse graph exceeds maximum allowed" << endl; exit(EXIT_FAILURE); }
     n_row_occ = ktn.n_nodes;
-    cout << "finished graph coarsening after " << i << " iterations" << endl;
+    cout << ">>>>> Finished graph coarsening after " << i << " iterations" << endl;
 }
 
 /* call external Python script to compute the matrix exponential of the coarsened graph.
    Return the initial, coarsened column-stochastic flow matrix in CSR sparse format */
 MLR_MCL::Csr_mtx MLR_MCL::get_matrix_exp(Network &ktn) {
 
-    cout << "Calculating sparse transition rate matrix" << endl;
+    cout << "\n>>>>> Calculating sparse transition rate matrix..." << endl;
     Csr_mtx k_mtx_sp = get_init_sparse_mtx(ktn); // sparse representation of transition rate matrix
-    cout << "Setting up Python interpreter" << endl;
+    cout << ">>>>> Setting up Python interpreter..." << endl;
     vector<pair<double,int>> Tspci; vector<int> Trl;
     const char *py_script_name = "calc_matrix_exp"; const char *py_func_name = "calc_expm";
     bool err_flag = false;
@@ -240,13 +248,13 @@ MLR_MCL::Csr_mtx MLR_MCL::get_matrix_exp(Network &ktn) {
         PyTuple_SetItem(pArgs,0,pValue); PyTuple_SetItem(pArgs,1,pValue2); PyTuple_SetItem(pArgs,2,pValue3);
         PyTuple_SetItem(pArgs,3,pValue4); PyTuple_SetItem(pArgs,4,pValue5);
         pRetval = PyObject_CallObject(pFunc,pArgs); // call the Python function
-        cout << "Returned transition matrix from Python script" << endl;
+        cout << ">>>>> Returned transition matrix from Python script" << endl;
         // Python function has a return value, so should not return NULL, and should return a tuple of lists
         if (pRetval==NULL || !PyTuple_Check(pRetval)) { err_flag = true; goto error; }
         pList1 = PyTuple_GetItem(pRetval,0); pList2 = PyTuple_GetItem(pRetval,1); pList3 = PyTuple_GetItem(pRetval,2);
         if (!PyList_Check(pList1) || !PyList_Check(pList2) || !PyList_Check(pList3)) { err_flag = true; goto error; }
         // extract the return values of the Python function
-        cout << "Transition matrix has " << PyList_Size(pList1) << " nonzero elems and dimension " << \
+        cout << "    Transition matrix has " << PyList_Size(pList1) << " nonzero elems and dimension " << \
                 PyList_Size(pList3) << endl;
         Tspci.resize(PyList_Size(pList1)); Trl.resize(PyList_Size(pList3));
         for (int i=0;i<PyList_Size(pList1);i++) {
@@ -321,48 +329,57 @@ MLR_MCL::Csr_mtx MLR_MCL::get_init_sparse_mtx(Network &ktn) {
 }
 
 /* perform regularisation (matrix product) operation for the transition matrix */
-MLR_MCL::Csr_mtx MLR_MCL::regularise(const Csr_mtx &T_csr, const Csr_mtx &TG_csr) {
+MLR_MCL::Csr_mtx MLR_MCL::regularise(const Csr_mtx &T_csr, const Csr_mtx_struct &TG_csr) {
 
-    Csr_mtx T_csr_new;
-    T_csr_new.first.reserve(n_row_occ*T_csr.second.size());
-    T_csr_new.second.resize(T_csr.second.size());
-    for (int i=0;i<T_csr.second.size();i++) { T_csr_new.second[i]=0; }
-    signed int lo=0, hi=T_csr.second[0]; // low/high indices of elements of current row in transition matrix
-    cout << "in regularise" << endl;
-    int rn=0;
-    int mop=0;
-    const vector<pair<double,int>> *const vecptr1 = &T_csr.first, *const vecptr2 = &TG_csr.first;
-    for (int i=0;i<n_row_occ;i++) {
-        while (lo==hi) {
-            lo = hi; hi = T_csr.second[rn+1]; rn++; }
+    int ncols = T_csr.second.size(); int rn,cn,i,j,curr_row,curr_col; double val;
+    vector<vector<pair<double,int>>> T_ec_new(n_row_occ);
+    vector<int> T_rl(ncols,0);
+    const vector<pair<double,int>> *const vp_T_er = &T_csr.first; // ptr to vec of elems & col indices of transn mtx
+    const vector<double> *const vp_TG_e = &TG_csr.T_e;
+    const vector<int> *const vp_TG_r = &TG_csr.T_c, *const vp_TG_cl = &TG_csr.T_rl;
+    // vector of CSR matrix row numbers for occupied row numbers only
+    vector<int> ridx(n_row_occ,0);
+    int row_occ=0; if (T_csr.second[0]!=0) { row_occ++; }
+    for (int i=1;i<ncols;i++) {
+        if (T_csr.second[i]!=T_csr.second[i-1]) { ridx[row_occ]=i; row_occ++; } }
+    if (row_occ!=n_row_occ) {
+        cout << "Error: incorrect tracking of number of occupied rows" << endl; exit(EXIT_FAILURE); }
+    signed int lo, hi; // low/high indices of elements in current row in transition matrix
+    signed int lo_col, hi_col; // low/high indices of elements in current col in regularisation matrix
+    #pragma omp parallel for default(none) private(i,j,rn,cn,lo,hi,lo_col,hi_col,val,curr_row,curr_col) \
+            shared(T_ec_new,T_rl,ridx,T_csr,ncols)
+    for (i=0;i<n_row_occ;i++) {
+        rn = ridx[i];
+        if (i!=0) { lo = T_csr.second[rn-1]; } else { lo = 0; }; hi = T_csr.second[rn];
         // low/high indices of elements of current col in regularisation matrix
-        signed int lo_col=0, hi_col=TG_csr.second[0];
-        int cn=0;
-        for (int j=0;j<T_csr.second.size();j++) {
+        lo_col=0, hi_col=(*vp_TG_cl)[0];
+        cn=0;
+        for (j=0;j<ncols;j++) {
+/*
             if (lo_col==hi_col) {
                 cout << "Error: column " << j+1 << " of regularisation matrix is empty" << endl;
                 exit(EXIT_FAILURE); }
-            int curr_row=lo, curr_col=lo_col;
-            double val=0.;
+*/
+            curr_row=lo; curr_col=lo_col;
+            val=0.;
             // multiplication of two sparse vectors with O(m+n) complexity
             while ((curr_row < hi) && (curr_col < hi_col)) {
-                if ((*vecptr1)[curr_row].second < (*vecptr2)[curr_col].second) { curr_row++;
-                } else if ((*vecptr1)[curr_row].second > (*vecptr2)[curr_col].second) { curr_col++;
+                if ((*vp_T_er)[curr_row].second < (*vp_TG_r)[curr_col]) { curr_row++;
+                } else if ((*vp_T_er)[curr_row].second > (*vp_TG_r)[curr_col]) { curr_col++;
                 } else {
-                    val += (*vecptr1)[curr_row].first*(*vecptr2)[curr_col].first;
-                    curr_row++; curr_col++; mop++;
+                    val += (*vp_T_er)[curr_row].first*(*vp_TG_e)[curr_col];
+                    curr_row++; curr_col++;
                 }
             }
-            if (val>eps) { T_csr_new.first.emplace_back(make_pair(val,cn)); T_csr_new.second[rn]++; }
-            lo_col = hi_col; hi_col = TG_csr.second[cn+1]; cn++;
+            if (val>eps) { // threads deal with separate rows (i & rn) so do not have to worry about interference
+                T_ec_new[i].emplace_back(make_pair(val,cn)); T_rl[rn]++;
+            }
+            lo_col = hi_col; hi_col = (*vp_TG_cl)[cn+1]; cn++;
         }
-        lo = hi; hi = T_csr.second[rn+1]; rn++;
     }
-    for (int i=1;i<T_csr_new.second.size();i++) {
-        T_csr_new.second[i] += T_csr_new.second[i-1]; }
-    T_csr_new.first.shrink_to_fit();
-    cout << "number of mop's: " << mop << endl;
-    cout << "leaving regularise()" << endl;
+    vector<pair<double,int>> T_ec = flatten<pair<double,int>>(T_ec_new);
+    for (int i=1;i<ncols;i++) { T_rl[i] += T_rl[i-1]; }
+    Csr_mtx T_csr_new = make_pair(T_ec,T_rl);
     return T_csr_new;
 }
 
@@ -411,26 +428,28 @@ void MLR_MCL::renormalise(Csr_mtx &T_csr) {
 }
 
 /* given a transition matrix in CSR format, return a regularisation matrix in CSC format */
-MLR_MCL::Csr_mtx MLR_MCL::get_reg_mtx(const Csr_mtx &T_csr) {
+MLR_MCL::Csr_mtx_struct MLR_MCL::get_reg_mtx(const Csr_mtx &T_csr) {
 
-    cout << "calculating regularisation matrix..." << endl;
-    vector<vector<pair<double,int>>> TG_er_al(T_csr.second.size()); // elems and row indices, adj list
+    vector<vector<double>> TG_e_al(T_csr.second.size()); // elems, adj list
+    vector<vector<int>> TG_r_al(T_csr.second.size()); // row indices, adj list
     vector<int> TG_cl(T_csr.second.size()); // col lengths
     vector<pair<double,int>>::const_iterator it_vec;
     int k=0, rn=0; if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; };
     for (it_vec=T_csr.first.begin();it_vec!=T_csr.first.end();it_vec++) {
-        TG_er_al[it_vec->second].emplace_back(make_pair(it_vec->first,rn));
+        TG_e_al[it_vec->second].emplace_back(it_vec->first);
+        TG_r_al[it_vec->second].emplace_back(rn);
         k++;
         if ((k==T_csr.second[rn]) && (k<T_csr.first.size())) while (k==T_csr.second[rn]) { rn++; };
     }
-    k=0; TG_cl[k] = TG_er_al[k].size();
-    for (const auto &colvec: TG_er_al) {
+    k=0; TG_cl[k] = TG_r_al[k].size();
+    for (const auto &colvec: TG_r_al) {
         if (colvec.size()==0) {
             cout << "Error: column " << k+1 << " is unoccupied" << endl; exit(EXIT_FAILURE); }
         if (k>=1) TG_cl[k] = TG_cl[k-1] + colvec.size();
         k++; }
-    vector<pair<double,int>> TG_er = flatten<pair<double,int>>(TG_er_al);
-    Csr_mtx TG_csr = make_pair(TG_er,TG_cl);
+    vector<double> TG_e = flatten<double>(TG_e_al);
+    vector<int> TG_r = flatten<int>(TG_r_al);
+    Csr_mtx_struct TG_csr = { TG_e, TG_r, TG_cl };
     return TG_csr;
 }
 
@@ -474,7 +493,7 @@ MLR_MCL::Csr_mtx MLR_MCL::project_flow(Network &ktn, Csr_mtx &T_csr, const map<i
         k++; }
     // flatten the refined transition matrix
     vector<pair<double,int>> T_ec = flatten<pair<double,int>>(T_ec_new);
-    cout << "no. of elems of matrix is now: " << T_ec.size() << endl;
+    cout << "    no. of elems of matrix is now: " << T_ec.size() << endl;
     Csr_mtx T_csr_new = make_pair(T_ec,T_rl);
     return T_csr_new;
 }
@@ -483,7 +502,7 @@ MLR_MCL::Csr_mtx MLR_MCL::project_flow(Network &ktn, Csr_mtx &T_csr, const map<i
    characterised by attractors */
 void MLR_MCL::interpret_clust(Network &ktn, const Csr_mtx &T_csr) {
 
-    cout << ">>>>> Interpreting the final stochastic matrix as a clustering..." << endl;
+    cout << "\n>>>>> Interpreting the final stochastic matrix as a clustering..." << endl;
     int n_comm=-1; // counter for community IDs
     vector<pair<double,int>>::const_iterator it_vec;
     int k=0, rn=0; if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; };
@@ -525,7 +544,7 @@ int main(int argc, char** argv) {
     if (argc > 12) { min_comm_sz = stoi(argv[12]); } else { min_comm_sz = 0; }
     if (argc > 13) { debug_flag = stoi(argv[13]); } else { debug_flag = 0; }
     if (argc > 14) { output_flag = stoi(argv[14]); } else { output_flag = 0; }
-    cout << ">>>>> Finished reading input arguments" << endl;
+    cout << "\n\n>>>>> Finished reading input arguments" << endl;
 
     vector<pair<int,int>> ts_conns = Read_ktn::read_double_col<int>(nts,"ts_conns.dat");
     vector<double> ts_weights = Read_ktn::read_single_col<double>(2*nts,"ts_weights.dat");
@@ -543,7 +562,7 @@ int main(int argc, char** argv) {
     MLR_MCL mcl_obj (r,b,n_C,n_cur,max_it,eps,tau,seed,min_C,min_comm_sz);
     mcl_obj.run_mcl(ktn);
 
-    cout << ">>>>> Finished" << endl;
+    cout << "\n>>>>> Finished" << endl;
 
     return 0;
 }
