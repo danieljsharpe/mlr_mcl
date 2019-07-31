@@ -118,7 +118,7 @@ void MLR_MCL::run_mcl(Network &ktn) {
 //    cout << "final matrix..." << endl; print_sparse_matrix(t_mtx_sp);
     if (min_comm_sz>0) Quality_clust::post_processing(ktn,min_comm_sz);
     cout << ">>>>> Writing communities and attractors to file..." << endl;
-    Quality_clust::write_comms(ktn);
+    Quality_clust::write_comms(ktn,0);
 }
 
 /* operations of Markov clustering main loop */
@@ -136,7 +136,11 @@ void MLR_MCL::mcl_main_ops(Csr_mtx &t_mtx_sp, const Csr_mtx_struct &tG_mtx_sp) {
    structure, calling this function has to be done in a separate execution with the
    output_flag arg set to 1 */
 void MLR_MCL::calc_quality_metrics(Network &ktn, int min_sz) {
-    if (min_sz>0) Quality_clust::post_processing(ktn,min_sz);
+    if (min_sz>0) {
+        Quality_clust::post_processing(ktn,min_sz);
+        cout << ">>>>> Writing processed communities and attractors to file..." << endl;
+        Quality_clust::write_comms(ktn,1);
+    }
     Quality_clust::find_intercomm_edges(ktn);
     cout << ">>>>> Writing inter-community edge bool values to file..." << endl;
     Quality_clust::find_intercomm_edges(ktn);
@@ -505,15 +509,16 @@ void MLR_MCL::interpret_clust(Network &ktn, const Csr_mtx &T_csr) {
     cout << "\n>>>>> Interpreting the final stochastic matrix as a clustering..." << endl;
     int n_comm=-1; // counter for community IDs
     vector<pair<double,int>>::const_iterator it_vec;
+    vector<int> att_dup(ktn.tot_nodes); // set flags if node is a duplicate attractor
     int k=0, rn=0; if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; };
     for (it_vec=T_csr.first.begin();it_vec!=T_csr.first.end();it_vec++) {
         if (it_vec->first > 0.1) { // value considered non-negligible
-        if (!ktn.min_nodes[rn].attractor) {
-            ktn.min_nodes[rn].attractor=true;
-            if (ktn.min_nodes[rn].comm_id==-1) { n_comm++;
+        if ((!ktn.min_nodes[rn].attractor) && (!att_dup[rn])) {
+            if (ktn.min_nodes[rn].comm_id==-1) { n_comm++; ktn.min_nodes[rn].attractor=true;
             } else {
-                cout << "Warning: community " << ktn.min_nodes[rn].comm_id << \
-                        " is characterised by more than one attractor" << endl; }
+                att_dup[rn] = 1;
+                cout << "Warning: community " << ktn.min_nodes[rn].comm_id \
+                     << " is characterised by more than one attractor, duplicate is node " << rn << endl; }
         }
         if (ktn.min_nodes[it_vec->second].comm_id==-1) ktn.min_nodes[it_vec->second].comm_id = n_comm;
         }
@@ -537,7 +542,7 @@ int main(int argc, char** argv) {
     double tau = stod(argv[9]); // lag time for estimating transition matrix from transition rate matrix
     unsigned int seed = stoi(argv[10]); // random seed
     int min_C; // min. no. of nodes in coarsened graph (optional)
-    int min_comm_sz; // min. no. of (do post-processing if >0) (optional)
+    int min_comm_sz; // min. no. of nodes in a community (do post-processing if >0) (optional)
     int debug_flag; // run debug tests Y/N (optional)
     int output_flag; // read communities from file and calculate quality metrics only (optional)
     if (argc > 11) { min_C = stoi(argv[11]); } else { min_C = 0; }

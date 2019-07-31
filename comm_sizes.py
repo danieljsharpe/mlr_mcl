@@ -14,11 +14,13 @@ comm_ids = [0]*nmin
 
 ### SET CONDITIONS ### (x is a min_id)
 #pick_condition = lambda x: (comm_ids[x]==173)
-pick_condition = lambda x: (comm_sizes[comm_ids[x]]>=100)
-colour_condition = lambda x: (comm_sizes[comm_ids[x]]>=100)
+pick_condition = lambda x: (comm_sizes[comm_ids[x]]>=20)
+colour_condition = lambda x: (comm_sizes[comm_ids[x]]>=20)
+comm_file = "communities_new.dat"
+att_file = "attractors_new.dat"
 
 # find communities of minima and community sizes
-with open("communities.dat","r") as comm_f:
+with open(comm_file,"r") as comm_f:
     min_id=0
     for line in comm_f.readlines():
         comm_ids[min_id] = int(line)
@@ -29,7 +31,7 @@ with open("communities.dat","r") as comm_f:
 if do_att==1:
     is_attractor = {i: False for i in range(nmin)}
     found_attractor = {i: False for i in range(ncomm)}
-    with open("attractors.dat","r") as att_f:
+    with open(att_file,"r") as att_f:
         for line in att_f.readlines():
             is_attractor[int(line)-1] = True
 
