@@ -2,13 +2,10 @@
 C++ code for multi-level regularised Markov clustering (MLR-MCL) of a kinetic transition network
 Need three files: "ts_conns.dat" (two-column format: min1, min2) and "ts_weights.dat", "stat_prob.dat" (one-column format)
 in the current directory
-
 Compile with:
 g++ -std=c++11 mlr_mcl.cpp ktn.cpp utils.cpp quality.cpp -I /usr/include/python2.7/ -L /usr/include/python2.7/Python.h -lpython2.7 -o mlr_mcl -fopenmp
-
 Execute with e.g.:
 ./mlr_mcl 22659 34145 1.2 0.5 15 3 10 1.E-08 1.E-12 19 500
-
 Daniel J. Sharpe
 April 2019
 */
@@ -278,6 +275,10 @@ MLR_MCL::Csr_mtx MLR_MCL::get_matrix_exp(Network &ktn) {
             cout << "Fatal: manual error checking has raised a flag" << endl; exit(EXIT_FAILURE); }
     Py_Finalize(); // finished with Python interpreter
     Csr_mtx t_mtx_sp = make_pair(Tspci,Trl);
+    int row_occ=0; if (t_mtx_sp.second[0]!=0) { row_occ++; }
+    for (int i=1;i<n_row_occ;i++) {
+        if (t_mtx_sp.second[i]!=t_mtx_sp.second[i-1]) row_occ++; }
+    n_row_occ = row_occ;
     return t_mtx_sp;
 }
 
@@ -347,7 +348,8 @@ MLR_MCL::Csr_mtx MLR_MCL::regularise(const Csr_mtx &T_csr, const Csr_mtx_struct 
     for (int i=1;i<ncols;i++) {
         if (T_csr.second[i]!=T_csr.second[i-1]) { ridx[row_occ]=i; row_occ++; } }
     if (row_occ!=n_row_occ) {
-        cout << "Error: incorrect tracking of number of occupied rows" << endl; exit(EXIT_FAILURE); }
+        cout << "Error: incorrect tracking of number of occupied rows: " \
+             << row_occ << " compared to stored value " << n_row_occ << endl; exit(EXIT_FAILURE); }
     signed int lo, hi; // low/high indices of elements in current row in transition matrix
     signed int lo_col, hi_col; // low/high indices of elements in current col in regularisation matrix
     #pragma omp parallel for default(none) private(i,j,rn,cn,lo,hi,lo_col,hi_col,val,curr_row,curr_col) \
@@ -475,7 +477,6 @@ MLR_MCL::Csr_mtx MLR_MCL::project_flow(Network &ktn, Csr_mtx &T_csr, const map<i
     vector<vector<pair<double,int>>> T_ec_new(idxlist.size());
     vector<int> T_rl(idxlist.size(),0);
     k=0; int rn=0; // row no.
-    int rn_occ=0; // occupied row no.
     if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; }; // account for if first elem is not in first row
     vector<pair<double,int>>::iterator it_vec;
     // only two of the four corresponding elements in the refined matrix are non-zero
@@ -510,20 +511,27 @@ void MLR_MCL::interpret_clust(Network &ktn, const Csr_mtx &T_csr) {
     int n_comm=-1; // counter for community IDs
     vector<pair<double,int>>::const_iterator it_vec;
     vector<int> att_dup(ktn.tot_nodes); // set flags if node is a duplicate attractor
+    vector<double> prev_bestval(ktn.tot_nodes,0.); // previous highest value in matrix seen for this node
     int k=0, rn=0; if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; };
+    int dup_comm=-1; // community associated with duplicate attractor (-1 indicates no duplicate found)
     for (it_vec=T_csr.first.begin();it_vec!=T_csr.first.end();it_vec++) {
         if (it_vec->first > 0.1) { // value considered non-negligible
         if ((!ktn.min_nodes[rn].attractor) && (!att_dup[rn])) {
             if (ktn.min_nodes[rn].comm_id==-1) { n_comm++; ktn.min_nodes[rn].attractor=true;
             } else {
-                att_dup[rn] = 1;
+                att_dup[rn] = 1; dup_comm=ktn.min_nodes[rn].comm_id;
                 cout << "Warning: community " << ktn.min_nodes[rn].comm_id \
                      << " is characterised by more than one attractor, duplicate is node " << rn << endl; }
         }
-        if (ktn.min_nodes[it_vec->second].comm_id==-1) ktn.min_nodes[it_vec->second].comm_id = n_comm;
+        // a node is assigned a community based on the attractor associated with the largest nonzero matrix elem
+        if (ktn.min_nodes[it_vec->second].comm_id==-1 || it_vec->first>prev_bestval[it_vec->second]) {
+            prev_bestval[it_vec->second]=it_vec->first;
+            if (dup_comm==-1) { ktn.min_nodes[it_vec->second].comm_id = n_comm;
+            } else { ktn.min_nodes[it_vec->second].comm_id = dup_comm; }
+        }
         }
         k++;
-        if (k==T_csr.second[rn]) while (k==T_csr.second[rn]) { rn++; };
+        if (k==T_csr.second[rn]) { dup_comm=-1; while (k==T_csr.second[rn]) { rn++; }; }
     }
     ktn.n_comms = n_comm+1;
 }

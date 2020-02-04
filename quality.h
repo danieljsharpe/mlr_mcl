@@ -4,6 +4,7 @@
 #define __QUALITY_H_INCLUDED__
 
 #include <queue>
+#include <utility>
 #include "ktn.h"
 
 using namespace std;
@@ -18,7 +19,9 @@ class Quality_clust {
     static void find_intercomm_edges(Network&);
     static void read_comms(Network&);
     static void write_comms(const Network&,int);
+    static void check_if_disjoint(Network&,vector<int>,vector<int>);
     static void post_processing(Network&,int);
+    static pair<vector<int>,vector<int>> ktn_bfs(Network&,int);
 };
 
 /* function to return a queued entry when popping from a queue */

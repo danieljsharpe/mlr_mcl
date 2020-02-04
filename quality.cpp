@@ -142,6 +142,7 @@ void Quality_clust::find_intercomm_edges(Network &ktn) {
 /* Read communities and attractors from previous output files (used when executing for post-processing) */
 void Quality_clust::read_comms(Network &ktn) {
 
+    cout << ">>>>> reading communities from file" << endl;
     vector<int> communities = Read_ktn::read_single_col<int>(ktn.tot_nodes,"communities.dat");
     int i=0, n_comms=0;
     for (auto comm: communities) {
@@ -152,9 +153,13 @@ void Quality_clust::read_comms(Network &ktn) {
         if (comm+1>n_comms) n_comms = comm+1;
     }
     ktn.n_comms = n_comms;
+    vector<int> comm_sizes(ktn.n_comms);
+    for (auto &node: ktn.min_nodes) comm_sizes[node.comm_id]++;
+    cout << ">>>>> reading attractors from file" << endl;
     vector<int> attractors = Read_ktn::read_single_col<int>(ktn.n_comms,"attractors.dat");
     for (auto att: attractors) {
         ktn.min_nodes[att-1].attractor=true; }
+    check_if_disjoint(ktn,comm_sizes,attractors);
 }
 
 /* Write communities to which nodes belong to a file "communities.dat" and write the
@@ -178,15 +183,30 @@ void Quality_clust::write_comms(const Network &ktn, int opt) {
     comms_f.close(); attractors_f.close();
 }
 
+/* function checks that each community is a fully connected component */
+void Quality_clust::check_if_disjoint(Network &ktn, vector<int> comm_sizes, vector<int> attractors) {
+    // calculate community sizes and compare against results of BFS starting from attractor node
+    for (int i=0;i<ktn.n_comms;i++) {
+        pair<vector<int>,vector<int>> node_comm_masks = ktn_bfs(ktn,attractors[i]);
+        vector<int> node_disc=node_comm_masks.first; vector<int> comm_disc=node_comm_masks.second;
+        int comm_size=0, j=0;
+        for (int x: node_disc) {
+            if (x && ktn.min_nodes[j].comm_id==i) comm_size++; j++; }
+        cout << "  comm: " << i << "  comm size from file: " << comm_sizes[i] \
+             << "  comm size from BFS: " << comm_size << endl;
+        if (comm_sizes[i]!=comm_size) { // comm size from file does not equal comm size calculated from BFS
+            throw Network::Ktn_exception(); }
+    }
+}
+
 /* The smallest communities are repeatedly merged with the smallest neighbouring communities, until the
    number of nodes in all communities exceeds min_sz */
 void Quality_clust::post_processing(Network &ktn, int min_sz) {
     cout << ">>>>> post-processing network to subsume communities of < " << min_sz << " nodes" << endl;
-    int n_comms = ktn.n_comms;
+    int n_comms = ktn.n_comms; // keep track of number of communities
     vector<double> comm_sizes(n_comms); // number of nodes in each community
-    int active_comm; // ID of the community whose members are being searched for
+    int active_comm; // ID of the community whose members are being searched for (current smallest community)
     int merge_comm; // ID of the community to which the active community is to be merged
-    int n_disc;
     Node *nodeptr; Edge *edgeptr;
     for (int i=0;i<ktn.tot_nodes;i++) {
         comm_sizes[ktn.min_nodes[i].comm_id]++; }
@@ -201,58 +221,35 @@ void Quality_clust::post_processing(Network &ktn, int min_sz) {
     if (comm_sizes[active_comm] >= min_sz) {
         cout << "    all communities already exceed the size threshold" << endl; return; }
     while (comm_sizes[active_comm] < min_sz) {
-        // breadth-first search (BFS) to find all nodes of the active community
-        queue<int> nbr_queue; // queue of nodes of the active community to visit
-        vector<int> node_disc(ktn.tot_nodes); // flags to indicate BFS has discovered a node
-        vector<int> comm_disc(n_comms); // flags to indicate BFS has discovered a (neighbouring) community
-        vector<int> nbr_comm, nbr_nodes; // list of neighbouring communities and nodes, respectively
-        n_disc=0;
-        for (int i=0;i<ktn.tot_nodes;i++) {
-            if (ktn.min_nodes[i].comm_id==active_comm) {
-                node_disc[ktn.min_nodes[i].min_id-1] = 1; n_disc++;
-                nbr_nodes.emplace_back(ktn.min_nodes[i].min_id);
-                nbr_queue.push(ktn.min_nodes[i].min_id); break; }
+        int rep_node=-1; // representative node of current smallest community
+        int j=0;
+        for (auto &node: ktn.min_nodes) {
+            if (node.comm_id==active_comm) { rep_node=j+1; break; }
+            j++;
         }
-        if (n_disc==0) {
-            cout << "Error: selected community " << active_comm << " has no members" << endl;
-            throw Network::Ktn_exception(); }
-        while (!nbr_queue.empty()) {
-            int node_id = pop_from_queue(nbr_queue);
-            nodeptr = &ktn.min_nodes[node_id-1];
-            edgeptr = nodeptr->top_from;
-            while (edgeptr != nullptr) {
-                if ((edgeptr->to_node->comm_id != active_comm) && (!comm_disc[edgeptr->to_node->comm_id])) {
-                    comm_disc[edgeptr->to_node->comm_id] = 1;
-                    nbr_comm.emplace_back(edgeptr->to_node->comm_id);
-                } else if ((edgeptr->to_node->comm_id == active_comm) && (!node_disc[edgeptr->to_node->min_id-1])) {
-                    node_disc[edgeptr->to_node->min_id-1] = 1; n_disc++;
-                    nbr_nodes.emplace_back(edgeptr->to_node->min_id);
-                    nbr_queue.push(edgeptr->to_node->min_id);
-                }
-            edgeptr = edgeptr->next_from;
-            }
-        }
-        if (n_disc != comm_sizes[active_comm]) {
-            cout << "Error: community " << active_comm << " is disjoint" << endl;
-            throw Network::Ktn_exception(); }
-        merge_comm = nbr_comm[0];
-        for (auto comm: nbr_comm) {
-            if (comm_sizes[comm] < comm_sizes[merge_comm]) merge_comm = comm; }
-        cout << "  merging comm " << active_comm << "  size " << comm_sizes[active_comm] << "    with    comm " \
-             << merge_comm << "  size " << comm_sizes[merge_comm] << endl;
+        pair<vector<int>,vector<int>> node_comm_masks = ktn_bfs(ktn,rep_node);
+        vector<int> comm_disc=node_comm_masks.second;
+        j=0; comm_disc[active_comm]=0;
+        merge_comm=distance(begin(comm_disc),find_if(begin(comm_disc),end(comm_disc),[](int x) { return x != 0; }));
+        for (auto comm_nbr: comm_disc) {
+            if (comm_nbr && comm_sizes[j]<comm_sizes[merge_comm]) merge_comm=j; j++; }
+
+        cout << "  merging comm " << active_comm << "  of size " << comm_sizes[active_comm] << "    with    comm " \
+             << merge_comm << "  of size " << comm_sizes[merge_comm] << endl;
         comm_sizes[merge_comm] += comm_sizes[active_comm]; comm_sizes[active_comm] = 0;
-        ktn.n_comms--;
-        for (auto node: nbr_nodes) { // set new communities and attractors in the ktn data structure
-            ktn.min_nodes[node-1].comm_id = merge_comm;
-            if (ktn.min_nodes[node-1].attractor) ktn.min_nodes[node-1].attractor = false; }
+        n_comms--;
+        for (auto &node: ktn.min_nodes) { // set new communities and attractors in the ktn data structure
+            if (node.comm_id!=active_comm) continue;
+            node.comm_id = merge_comm;
+            if (node.attractor) node.attractor = false; }
         active_comm = min_element(comm_sizes.begin(),comm_sizes.end(),get_smallest_nonzero) - comm_sizes.begin();
     }
-    cout << ">>>>> no. of communities after merging: " << ktn.n_comms << endl;
     // trace comm_sizes and update comm_id's to be consistent
+    cout << ">>>>> setting new community IDs" << endl;
     int n_new_comms=0;
     unordered_map<int,int> comm_ids_map;
     comm_ids_map.reserve(ktn.n_comms);
-    for (int i=0;i<n_comms;i++) {
+    for (int i=0;i<ktn.n_comms;i++) {
         if (comm_sizes[i]!=0) { comm_ids_map.insert({i,n_new_comms}); n_new_comms++; }
     }
     for (int i=0;i<ktn.n_nodes;i++) {
@@ -260,4 +257,35 @@ void Quality_clust::post_processing(Network &ktn, int min_sz) {
         int new_comm_id = comm_ids_map.at(nodeptr->comm_id);
         nodeptr->comm_id = new_comm_id;
     }
+    ktn.n_comms=n_comms;
+    cout << ">>>>> no. of communities after merging: " << ktn.n_comms << endl;
+}
+
+/* use breadth first search, initiated from a particular node (eg the attractor of the community),
+   to find all members of a given community */
+pair<vector<int>,vector<int>> Quality_clust::ktn_bfs(Network &ktn, int att_min_id) {
+
+    int active_comm = ktn.min_nodes[att_min_id-1].comm_id;
+    queue<int> nbr_queue; // queue of nodes of the active community to visit
+    vector<int> node_disc(ktn.tot_nodes); // flags to indicate BFS has discovered a node
+    vector<int> comm_disc(ktn.n_comms); // flags to indicate BFS has discovered a (neighbouring) community
+    node_disc[att_min_id-1]=1;
+    comm_disc[active_comm]=1;
+    nbr_queue.push(att_min_id); // initial node to start BFS procedure
+    while (!nbr_queue.empty()) {
+        int node_id = pop_from_queue(nbr_queue);
+        Node *nodeptr = &ktn.min_nodes[node_id-1];
+        Edge *edgeptr = nodeptr->top_from;
+        while (edgeptr != nullptr) {
+            if ((edgeptr->to_node->comm_id != active_comm) && (!comm_disc[edgeptr->to_node->comm_id])) {
+                comm_disc[edgeptr->to_node->comm_id] = 1;
+                if (!node_disc[edgeptr->to_node->min_id-1]) node_disc[edgeptr->to_node->min_id-1] = 1;
+            } else if ((edgeptr->to_node->comm_id == active_comm) && (!node_disc[edgeptr->to_node->min_id-1])) {
+                node_disc[edgeptr->to_node->min_id-1] = 1;
+                nbr_queue.push(edgeptr->to_node->min_id);
+            }
+        edgeptr = edgeptr->next_from;
+        }
+    }
+    return make_pair(node_disc,comm_disc);
 }
