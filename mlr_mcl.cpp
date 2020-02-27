@@ -47,7 +47,7 @@ class MLR_MCL {
     MLR_MCL(double,double,int,int,int,double,double,unsigned int,int,int);
     ~MLR_MCL();
     void run_mcl(Network&);
-    static void calc_quality_metrics(Network&,int);
+    static void calc_quality_metrics(Network&,int,int,int);
 
     double r; double b; double eps; double tau;
     int n_C; int n_cur; int max_it; unsigned int seed; int min_C; int min_comm_sz;
@@ -132,9 +132,10 @@ void MLR_MCL::mcl_main_ops(Csr_mtx &t_mtx_sp, const Csr_mtx_struct &tG_mtx_sp) {
 /* calculate metrics to assess clustering quality. NB because HEM modifies the Network data
    structure, calling this function has to be done in a separate execution with the
    output_flag arg set to 1 */
-void MLR_MCL::calc_quality_metrics(Network &ktn, int min_sz) {
+void MLR_MCL::calc_quality_metrics(Network &ktn, int min_sz, int cap_sz, int processmode) {
     if (min_sz>0) {
-        Quality_clust::post_processing(ktn,min_sz);
+        if (processmode==1) { Quality_clust::post_processing(ktn,min_sz);
+        } else if (processmode==2) { Quality_clust::post_processing_rates(ktn,min_sz,cap_sz); }
         cout << ">>>>> Writing processed communities and attractors to file..." << endl;
         Quality_clust::write_comms(ktn,1);
     }
@@ -562,6 +563,7 @@ int main(int argc, char** argv) {
     vector<pair<int,int>> ts_conns = Read_ktn::read_double_col<int>(nts,"ts_conns.dat");
     vector<double> ts_weights = Read_ktn::read_single_col<double>(2*nts,"ts_weights.dat");
     vector<double> stat_probs = Read_ktn::read_single_col<double>(nmin,"stat_prob.dat");
+    cout << "\n\n>>>>> Finished reading input files" << endl;
 
     Network ktn(nmin,nts);
     Network::setup_network(ktn,nmin,nts,ts_conns,ts_weights,stat_probs);
@@ -570,7 +572,7 @@ int main(int argc, char** argv) {
     if (debug_flag) { run_debug_tests(ktn); exit(0); }
     if (output_flag) {
         Quality_clust::read_comms(ktn);
-        MLR_MCL::calc_quality_metrics(ktn,min_comm_sz); exit(0); }
+        MLR_MCL::calc_quality_metrics(ktn,min_comm_sz,min_C,output_flag); exit(0); }
 
     MLR_MCL mcl_obj (r,b,n_C,n_cur,max_it,eps,tau,seed,min_C,min_comm_sz);
     mcl_obj.run_mcl(ktn);
