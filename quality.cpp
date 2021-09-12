@@ -200,8 +200,8 @@ void Quality_clust::check_if_disjoint(Network &ktn, vector<int> comm_sizes, vect
             int j=0;
             for (int x: node_disc) {
                 if (!x && ktn.min_nodes[j].comm_id==i) cout << "  " << j+1; j++; }
-            cout << endl;
-            throw Network::Ktn_exception(); }
+            cout << endl; } // quack
+//            throw Network::Ktn_exception(); }
     }
 }
 

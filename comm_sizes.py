@@ -1,4 +1,4 @@
-''' Write out sizes of each community to file "comm_sizes.dat"
+''' Write out sizes of each community in specified "communities" file to file "comm_sizes.dat"
     Set condition for writing a file "pick.dat" (to show only certain nodes with disconnectionDPS)
     Set condition for writing a file "colours.dat" (colouring of communities)
     Read/write attractors, 1/2 for Y/N '''
@@ -13,11 +13,11 @@ comm_sizes = [0]*ncomm
 comm_ids = [0]*nmin
 
 ### SET CONDITIONS ### (x is a min_id)
-#pick_condition = lambda x: (comm_ids[x]==173)
-pick_condition = lambda x: (comm_sizes[comm_ids[x]]>=20)
-colour_condition = lambda x: (comm_sizes[comm_ids[x]]>=20)
-comm_file = "communities_new.dat"
-att_file = "attractors_new.dat"
+#pick_condition = lambda x: (comm_ids[x]==11)
+pick_condition = lambda x: (comm_sizes[comm_ids[x]]>=100)
+colour_condition = lambda x: (comm_sizes[comm_ids[x]]>=100)
+comm_file = "communities.dat" # name of communities file to read from
+att_file = "attractors.dat" # name of attractors file to write to
 
 # find communities of minima and community sizes
 with open(comm_file,"r") as comm_f:
